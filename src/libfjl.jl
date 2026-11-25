@@ -54,13 +54,12 @@ function load_libfjl()
 end
 
 # A ccall that may block runs GC-safe, so a collection never waits on it.
-const CI1_DBG_NOSAFE = Ref(false) # CI1-DEBUG
 macro gcsafe_ccall(expr)
     if VERSION >= v"1.12.0-"
         return esc(:(@ccall gc_safe = true $expr))
     end
-    # Arguments are evaluated and converted before the thread turns GC-safe:
-    # Julia code running in that state races a collection.
+    # The exported jl_gc_safe_enter/leave act on the current thread and take no
+    # ptls. Arguments are converted first: Julia code must not run GC-safe.
     (Meta.isexpr(expr, :(::)) && Meta.isexpr(expr.args[1], :call)) || error("@gcsafe_ccall: expected f(args...)::T")
     call, rettype = expr.args
     pre = Expr[]
@@ -72,15 +71,9 @@ macro gcsafe_ccall(expr)
     end
     quote
         $(pre...)
-        local r
-        if $(GlobalRef(@__MODULE__, :CI1_DBG_NOSAFE))[] # CI1-DEBUG
-            r = @ccall $(Expr(:(::), Expr(:call, call.args[1], args...), rettype))
-        else
-        local ptls = ccall(:jl_get_ptls_states, Ptr{Cvoid}, ())
-        local state = ccall(:jl_gc_safe_enter, Int8, (Ptr{Cvoid},), ptls)
-        r = @ccall $(Expr(:(::), Expr(:call, call.args[1], args...), rettype))
-        ccall(:jl_gc_safe_leave, Cvoid, (Ptr{Cvoid}, Int8), ptls, state)
-        end
+        local state = ccall(:jl_gc_safe_enter, Int8, ())
+        local r = @ccall $(Expr(:(::), Expr(:call, call.args[1], args...), rettype))
+        ccall(:jl_gc_safe_leave, Cvoid, (Int8,), state)
         r
     end |> esc
 end
