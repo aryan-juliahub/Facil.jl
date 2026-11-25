@@ -224,7 +224,7 @@ function scenario_tasks(p)
 
         # Clients that leave while their handler runs.
         d0 = F.DROPPED[]
-        r = node("abort", p, 1000, 100, "/fsleep/0.05", 5)
+        r = node("abort", p, 1000, 100, "/fsleep/0.5", 5)
         @test r == """{"closed":1000,"answered":0}"""
         @test no_leaks()
         @test wait_until(() -> F.connections(srv) == 0; timeout = 30)

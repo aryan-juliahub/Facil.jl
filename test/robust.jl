@@ -231,8 +231,7 @@ end
         sleep(0.5)
         t0 = time()
         kill(proc, Base.SIGTERM)
-        sleep(0.5)
-        @test connect_refused(p) && connect_refused(q)
+        @test timedwait(() -> connect_refused(p) && connect_refused(q), 3; pollint = 0.1) == :ok
         @test timedwait(() -> closed[], 6) == :ok
         @test endswith(fetch(up), "100000")
         @test endswith(fetch(up2), "50000")

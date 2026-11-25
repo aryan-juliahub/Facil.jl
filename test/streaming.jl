@@ -74,6 +74,24 @@ function stream_app(req)
     Response(StatusCodes.OK, "plain " * p)
 end
 
+# Reads a chunked body of 1 MiB blocks, each filled with its index mod 251.
+function read_blocks(s)
+    got = 0
+    ok = true
+    while true
+        n = parse(Int, readline(s); base = 16)
+        n == 0 && break
+        b = read(s, n)
+        readline(s)
+        for (k, x) in enumerate(b)
+            x == UInt8(((got + k - 1) >> 20 + 1) % 251) || (ok = false; break)
+        end
+        got += n
+    end
+    readline(s)
+    ok, got
+end
+
 expected_chunks(n, size) = reduce(vcat, [fill(UInt8('a' + (i - 1) % 26), size) for i in 1:n])
 
 @testset "streaming" begin
@@ -154,21 +172,7 @@ expected_chunks(n, size) = reduce(vcat, [fill(UInt8('a' + (i - 1) % 26), size) f
             send_raw(s, request("GET", "/big/32"))
             _, hs = M6Http.read_head(s)
             sleep(0.5)
-            got = 0
-            ok = true
-            while true
-                n = parse(Int, readline(s); base = 16)
-                n == 0 && break
-                b = read(s, n)
-                readline(s)
-                # every 1 MiB block is filled with its index
-                for (k, x) in enumerate(b)
-                    idx = (got + k - 1) >> 20 + 1
-                    x == UInt8(idx % 251) || (ok = false; break)
-                end
-                got += n
-            end
-            readline(s)
+            ok, got = read_blocks(s)
             @test ok
             @test got == 32 << 20
             close(t); close(s)

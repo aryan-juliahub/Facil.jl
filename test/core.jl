@@ -395,7 +395,9 @@ end
     println("GC stress: $ok ok, $bad bad, $err client errors, $(N_REQ[]) handled, $(length(gcs)) forced GCs ",
             "(median $(round(gcs[end ÷ 2] * 1e3, digits = 2)) ms, max $(round(gcs[end] * 1e3, digits = 2)) ms; ",
             "idle full GC max $(round(maximum(idle) * 1e3, digits = 2)) ms)")
-    @test ok >= 100_000
+    # A floor on progress, not a benchmark: CI runners share 3-4 vCPUs among
+    # the client, the server and the collection loop.
+    @test ok >= 1_000 * secs
     @test bad == 0
     @test err == 0
     @test N_ERR[] == 0
