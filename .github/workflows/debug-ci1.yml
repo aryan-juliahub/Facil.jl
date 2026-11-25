@@ -1,0 +1,38 @@
+name: debug-ci1
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  d:
+    name: dbg ${{ matrix.v }} ${{ matrix.mode }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        v: ['1.10']
+        mode: [core-server, server-only, server-gc1, core-server-gc1]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - run: sudo apt-get update && sudo apt-get install -y zlib1g-dev
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.v }}
+      - uses: julia-actions/cache@v2
+      - run: |
+          julia --project=ci110 -e 'using Pkg; Pkg.develop([PackageSpec(path="lib/HttpTypes"), PackageSpec(path=".")]); Pkg.add(["Test", "Downloads"]); Pkg.build("Facil")'
+      - name: run
+        run: |
+          case "${{ matrix.mode }}" in
+            core-server) files='"core.jl","server.jl"'; g="" ;;
+            server-only) files='"server.jl"'; g="" ;;
+            server-gc1) files='"server.jl"'; g="--gcthreads=1" ;;
+            core-server-gc1) files='"core.jl","server.jl"'; g="--gcthreads=1" ;;
+          esac
+          for i in 1 2 3; do
+            julia -t 4 $g --project=ci110 -e "using Test; @testset \"x\" begin for f in ($files,); include(joinpath(\"test\", f)); end; end" 2>&1 | grep -vE '^ +(@|\[)' | tail -60
+            echo "== iteration $i exit ${PIPESTATUS[0]}"
+          done
