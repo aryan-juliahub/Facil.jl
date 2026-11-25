@@ -105,7 +105,9 @@ bc_exact() { # every non-stalled subscriber got every message, in order
 
 bcast order4 1000 1000 5 0 FIO_THREADS=4 && bc_exact order4
 
-export BC_SIZE=1000
+# Linux grows a stalled loopback connection's send buffer to 4 MiB, so there
+# the backlog must exceed that before the 1 MiB server-side limit is reached.
+if [ "$(uname -s)" = Linux ]; then export BC_SIZE=5000; else export BC_SIZE=1000; fi
 L=WS_SLOW_LIMIT=1048576
 if bcast slow-close 1000 200 10 100 $L WS_SLOW_POLICY=close; then
   bc_exact slow-close

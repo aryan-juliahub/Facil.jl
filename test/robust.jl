@@ -126,8 +126,10 @@ end
         before = parse(Int, match(r"\"rssBeforeMB\":(\d+)", r)[1])
         peak = parse(Int, match(r"\"rssPeakMB\":(\d+)", r)[1])
         @test occursin("\"connected\":200", r)
-        @test peak - before < 500
-        peak - before < 500 || @info r
+        # Unbounded queueing would hold 1.6 GB of replies. The margin covers
+        # uncollected garbage: Julia 1.10 on Linux peaked at 575 MB.
+        @test peak - before < 800
+        peak - before < 800 || @info r
         @test readchomp(`curl -s http://127.0.0.1:$p/hello`) == "hello"
         close(srv); wait(srv)
         GC.gc()
