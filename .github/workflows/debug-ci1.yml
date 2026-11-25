@@ -5,14 +5,17 @@ permissions:
   contents: read
 jobs:
   d:
-    name: dbg ${{ matrix.v }} ${{ matrix.mode }}
+    name: dbg ${{ matrix.v }} ${{ matrix.mode }} t${{ matrix.t }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        v: ['1.10']
-        mode: [core-server, server-only, server-gc1, core-server-gc1]
+        v: ['1.10', '1.11']
+        mode: [vector, string, inline, nogc]
+        t: ['4']
+        include:
+          - {v: '1.10', mode: vector, t: '1'}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -23,16 +26,10 @@ jobs:
           version: ${{ matrix.v }}
       - uses: julia-actions/cache@v2
       - run: |
-          julia --project=ci110 -e 'using Pkg; Pkg.develop([PackageSpec(path="lib/HttpTypes"), PackageSpec(path=".")]); Pkg.add(["Test", "Downloads"]); Pkg.build("Facil")'
+          julia --project=ci110 -e 'using Pkg; Pkg.develop([PackageSpec(path="lib/HttpTypes"), PackageSpec(path=".")]); Pkg.build("Facil")'
       - name: run
         run: |
-          case "${{ matrix.mode }}" in
-            core-server) files='"core.jl","server.jl"'; g="" ;;
-            server-only) files='"server.jl"'; g="" ;;
-            server-gc1) files='"server.jl"'; g="--gcthreads=1" ;;
-            core-server-gc1) files='"core.jl","server.jl"'; g="--gcthreads=1" ;;
-          esac
-          for i in 1 2 3; do
-            julia -t 4 $g --project=ci110 -e "using Test; @testset \"x\" begin for f in ($files,); include(joinpath(\"test\", f)); end; end" 2>&1 | grep -vE '^ +(@|\[)' | tail -60
+          for i in 1 2; do
+            julia -t ${{ matrix.t }} --project=ci110 .github/debug-ci1/repro.jl ${{ matrix.mode }} 2>&1 | grep -vE '^ +(@|\[)' | grep -vE '^(jl_|ijl_|_jl|eval|do_call|jfptr|unknown function)' | tail -40
             echo "== iteration $i exit ${PIPESTATUS[0]}"
           done
