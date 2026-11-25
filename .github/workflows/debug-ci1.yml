@@ -11,11 +11,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        v: ['1.10', '1.11']
-        mode: [vector, string, inline, nogc]
-        t: ['4']
-        include:
-          - {v: '1.10', mode: vector, t: '1'}
+        v: ['1.10']
+        mode: [vector, nosafe, keep]
+        t: ['4', '4,1']
     steps:
       - uses: actions/checkout@v4
         with:
