@@ -218,11 +218,15 @@ static int fail(int fd, const char *what) {
   if (fd >= 0) close(fd);
   return -1;
 }
-static int ws_connect(conn_t *c) {
+static int ws_connect(conn_t *c, int stalled) {
   struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(port)};
   a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
   int fd = socket(AF_INET, SOCK_STREAM, 0), one = 1;
   if (fd < 0) return fail(-1, "socket");
+  /* A small receive window keeps a stalled subscriber's backlog on the server
+   * rather than in the kernel (Linux autotunes loopback buffers to megabytes). */
+  int rcvbuf = 16384;
+  if (stalled) setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
   if (connect(fd, (struct sockaddr *)&a, sizeof(a))) return fail(fd, "connect");
   setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
   /* Close by reset: a normal close would park the port in TIME_WAIT for 30 s. */
@@ -298,9 +302,10 @@ int main(int argc, char **argv) {
   for (int i = 0; i < nthr; i++)
     for (int j = 0; j < T[i].n; j++) {
       conn_t *c = &T[i].c[j];
-      if (ws_connect(c)) { connect_errors++; c->dead = 1; c->fd = -1; continue; }
       const long gi = c - C;
-      if (n_stalled && gi * n_stalled / nconn != (gi + 1) * n_stalled / nconn) continue;
+      const int stalled = n_stalled && gi * n_stalled / nconn != (gi + 1) * n_stalled / nconn;
+      if (ws_connect(c, stalled)) { connect_errors++; c->dead = 1; c->fd = -1; continue; }
+      if (stalled) continue;
       T[i].active++;
       rdpoll_add(T[i].kq, c->fd, c);
     }
