@@ -1,0 +1,10 @@
+{
+  "name": "facil-scoreboard-node",
+  "private": true,
+  "description": "Node.js opponents and the autocannon client for the Facil.jl scoreboard",
+  "dependencies": {
+    "autocannon": "7.15.0",
+    "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.52.0",
+    "ws": "8.23.0"
+  }
+}

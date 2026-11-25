@@ -1,0 +1,205 @@
+diff --git a/lib/facil/http/http1.c b/lib/facil/http/http1.c
+--- a/lib/facil/http/http1.c
++++ b/lib/facil/http/http1.c
+@@ -35,9 +35,11 @@
+   uint8_t is_client;
+   uint8_t stop;
+   uint8_t answered; /* a response went out during the current parse */
+-  /* the read buffer: `buf`, or a larger heap block while a body needs one */
++  /* the read buffer: none between requests, the thread's scratch buffer while
++   * `on_data` runs, or a heap block (`rown`) while unparsed bytes wait */
+   uint8_t *rbuf;
+   uintptr_t rcap;
++  uint8_t rown;
+   struct {
+     uint8_t mode;
+     uint8_t direct;    /* socket reads land in data + len */
+@@ -54,7 +56,6 @@
+     void *udata;
+     char *path;
+   } body;
+-  uint8_t buf[];
+ } http1pr_s;
+ 
+ #define H1_STOP_BODY 8 /* a streaming consumer asked for a pause */
+@@ -1128,22 +1129,70 @@
+  * built-in one as soon as what is left over fits there. */
+ static void h1_rbuf_fit(http1pr_s *p) {
+   if (p->body.want_big) {
+-    if (p->rbuf != p->buf)
++    if (p->rcap > HTTP_MAX_HEADER_LENGTH)
+       return;
+     uint8_t *big = malloc(h1_body_cfg.read_chunk);
+     if (!big)
+       return;
+-    memcpy(big, p->buf, p->buf_len);
++    if (p->buf_len)
++      memcpy(big, p->rbuf, p->buf_len);
++    if (p->rown)
++      free(p->rbuf);
+     p->rbuf = big;
++    p->rown = 1;
+     p->rcap = h1_body_cfg.read_chunk;
+-  } else if (p->rbuf != p->buf && p->buf_len <= HTTP_MAX_HEADER_LENGTH) {
+-    memcpy(p->buf, p->rbuf, p->buf_len);
++  } else if (p->rcap > HTTP_MAX_HEADER_LENGTH &&
++             p->buf_len <= HTTP_MAX_HEADER_LENGTH) {
++    uint8_t *small = p->buf_len ? malloc(HTTP_MAX_HEADER_LENGTH) : NULL;
++    if (p->buf_len && !small)
++      return;
++    if (small)
++      memcpy(small, p->rbuf, p->buf_len);
+     free(p->rbuf);
+-    p->rbuf = p->buf;
++    p->rbuf = small;
++    p->rown = small != NULL;
+     p->rcap = HTTP_MAX_HEADER_LENGTH;
+   }
+ }
+ 
++/* Connections share one read buffer per thread while `on_data` runs; only
++ * bytes left unparsed when it returns are moved to the connection's own
++ * block, which is freed again once they are consumed. */
++static __thread uint8_t *h1_scratch;
++
++static int h1_rbuf_acquire(http1pr_s *p) {
++  if (p->rbuf)
++    return 0;
++  if (!h1_scratch && !(h1_scratch = malloc(HTTP_MAX_HEADER_LENGTH)))
++    return -1;
++  p->rbuf = h1_scratch;
++  p->rcap = HTTP_MAX_HEADER_LENGTH;
++  return 0;
++}
++
++static void h1_rbuf_release(intptr_t uuid, http1pr_s *p) {
++  if (p->rbuf == h1_scratch) {
++    if (!p->buf_len) {
++      p->rbuf = NULL;
++      return;
++    }
++    uint8_t *own = malloc(HTTP_MAX_HEADER_LENGTH);
++    if (!own) {
++      p->rbuf = NULL;
++      p->buf_len = 0;
++      fio_close(uuid);
++      return;
++    }
++    memcpy(own, p->rbuf, p->buf_len);
++    p->rbuf = own;
++    p->rown = 1;
++  } else if (p->rown && !p->buf_len && p->rcap <= HTTP_MAX_HEADER_LENGTH) {
++    free(p->rbuf);
++    p->rbuf = NULL;
++    p->rown = 0;
++  }
++}
++
+ /* Reads the socket straight into the body's memory, exactly up to its end,
+  * so no byte of a following request is taken. 1 once the request was dispatched. */
+ static int h1_body_read_direct(intptr_t uuid, http1pr_s *p) {
+@@ -1265,7 +1314,7 @@
+     return;
+   if (p->body.direct) {
+     h1_body_read_direct(uuid, p);
+-  } else if (p->rbuf != before && p->rbuf != p->buf) {
++  } else if (p->rbuf != before && p->rcap > HTTP_MAX_HEADER_LENGTH) {
+     ssize_t i = fio_read(uuid, p->rbuf + p->buf_len, p->rcap - p->buf_len);
+     if (i > 0) {
+       p->buf_len += i;
+@@ -1276,8 +1325,7 @@
+ }
+ 
+ /** called when a data is available, but will not run concurrently */
+-static void http1_on_data(intptr_t uuid, fio_protocol_s *protocol) {
+-  http1pr_s *p = (http1pr_s *)protocol;
++static void h1_on_data_now(intptr_t uuid, http1pr_s *p) {
+   if (p->stop) {
+     fio_suspend(uuid);
+     return;
+@@ -1298,6 +1346,16 @@
+   h1_after_consume(uuid, p);
+ }
+ 
++static void http1_on_data(intptr_t uuid, fio_protocol_s *protocol) {
++  http1pr_s *p = (http1pr_s *)protocol;
++  if (h1_rbuf_acquire(p)) {
++    fio_close(uuid);
++    return;
++  }
++  h1_on_data_now(uuid, p);
++  h1_rbuf_release(uuid, p);
++}
++
+ /** called when the connection was closed, but will not run concurrently */
+ static void http1_on_close(intptr_t uuid, fio_protocol_s *protocol) {
+   http1_destroy(protocol);
+@@ -1321,8 +1379,7 @@
+ }
+ 
+ /** called when a data is available for the first time */
+-static void http1_on_data_first_time(intptr_t uuid, fio_protocol_s *protocol) {
+-  http1pr_s *p = (http1pr_s *)protocol;
++static void h1_on_data_first_now(intptr_t uuid, http1pr_s *p) {
+   ssize_t i;
+ 
+   i = fio_read(uuid, p->rbuf + p->buf_len, p->rcap - p->buf_len);
+@@ -1345,6 +1402,16 @@
+   h1_after_consume(uuid, p);
+ }
+ 
++static void http1_on_data_first_time(intptr_t uuid, fio_protocol_s *protocol) {
++  http1pr_s *p = (http1pr_s *)protocol;
++  if (h1_rbuf_acquire(p)) {
++    fio_close(uuid);
++    return;
++  }
++  h1_on_data_first_now(uuid, p);
++  h1_rbuf_release(uuid, p);
++}
++
+ /* *****************************************************************************
+ Public API
+ ***************************************************************************** */
+@@ -1355,7 +1422,7 @@
+                           void *unread_data, size_t unread_length) {
+   if (unread_data && unread_length > HTTP_MAX_HEADER_LENGTH)
+     return NULL;
+-  http1pr_s *p = fio_malloc(sizeof(*p) + HTTP_MAX_HEADER_LENGTH);
++  http1pr_s *p = fio_malloc(sizeof(*p));
+   // FIO_LOG_DEBUG("Allocated HTTP/1.1 protocol at. %p", (void *)p);
+   FIO_ASSERT_ALLOC(p);
+   *p = (http1pr_s){
+@@ -1370,14 +1437,19 @@
+       .max_header_size = settings->max_header_size,
+       .is_client = settings->is_client,
+   };
+-  p->rbuf = p->buf;
+   p->rcap = HTTP_MAX_HEADER_LENGTH;
+   p->body.fd = -1;
+-  http_s_new(&p->request, &p->p, &HTTP1_VTABLE);
+-  if (unread_data && unread_length <= HTTP_MAX_HEADER_LENGTH) {
+-    memcpy(p->buf, unread_data, unread_length);
++  if (unread_data && unread_length) {
++    p->rbuf = malloc(HTTP_MAX_HEADER_LENGTH);
++    if (!p->rbuf) {
++      fio_free(p);
++      return NULL;
++    }
++    p->rown = 1;
++    memcpy(p->rbuf, unread_data, unread_length);
+     p->buf_len = unread_length;
+   }
++  http_s_new(&p->request, &p->p, &HTTP1_VTABLE);
+   fio_attach(uuid, &p->p.protocol);
+   if (unread_data && unread_length <= HTTP_MAX_HEADER_LENGTH) {
+     fio_force_event(uuid, FIO_EVENT_ON_DATA);
+@@ -1390,7 +1462,7 @@
+   http1pr_s *p = (http1pr_s *)pr;
+   http1_pr2handle(p).status = 0;
+   h1_body_clear(p);
+-  if (p->rbuf != p->buf)
++  if (p->rown)
+     free(p->rbuf);
+   http_s_destroy(&http1_pr2handle(p), 0);
+   fio_free(p);

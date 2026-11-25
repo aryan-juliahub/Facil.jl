@@ -1,0 +1,142 @@
+diff --git a/lib/facil/http/parsers/websocket_parser.h b/lib/facil/http/parsers/websocket_parser.h
+index 7a1abcb..cad5b8b 100644
+--- a/lib/facil/http/parsers/websocket_parser.h
++++ b/lib/facil/http/parsers/websocket_parser.h
+@@ -147,6 +147,35 @@ Message masking
+ void websocket_xmask(void *msg, uint64_t len, uint32_t mask) {
+   uint8_t *p = (uint8_t *)msg;
+   const uint64_t mask64 = ((uint64_t)mask << 32) | mask;
++#if defined(__GNUC__) || defined(__clang__)
++  typedef uint64_t ws_v2_t __attribute__((vector_size(16)));
++  const ws_v2_t mv = {mask64, mask64};
++  while (len >= 64) {
++    ws_v2_t a, b, c, d;
++    memcpy(&a, p, 16);
++    memcpy(&b, p + 16, 16);
++    memcpy(&c, p + 32, 16);
++    memcpy(&d, p + 48, 16);
++    a ^= mv;
++    b ^= mv;
++    c ^= mv;
++    d ^= mv;
++    memcpy(p, &a, 16);
++    memcpy(p + 16, &b, 16);
++    memcpy(p + 32, &c, 16);
++    memcpy(p + 48, &d, 16);
++    p += 64;
++    len -= 64;
++  }
++  while (len >= 16) {
++    ws_v2_t a;
++    memcpy(&a, p, 16);
++    a ^= mv;
++    memcpy(p, &a, 16);
++    p += 16;
++    len -= 16;
++  }
++#endif
+   while (len >= 8) {
+     uint64_t v;
+     memcpy(&v, p, 8);
+diff --git a/lib/facil/http/websockets.c b/lib/facil/http/websockets.c
+index 1667d60..733dca7 100644
+--- a/lib/facil/http/websockets.c
++++ b/lib/facil/http/websockets.c
+@@ -196,9 +196,28 @@ static int ws_utf8_valid(const uint8_t *s, size_t len) {
+ static __thread z_stream *ws_z_deflate, *ws_z_inflate;
+ static __thread struct buffer_s ws_z_out, ws_z_in;
+ 
++static websocket_compress_fn ws_compress_fn;
++static websocket_decompress_fn ws_decompress_fn;
++void websocket_deflate_codec_set(websocket_compress_fn compress,
++                                 websocket_decompress_fn decompress) {
++  ws_compress_fn = compress;
++  ws_decompress_fn = decompress;
++}
++
+ /* Compresses one message; the result lives until the thread's next call. */
+ static fio_str_info_s ws_deflate_msg(fio_str_info_s in) {
+   const fio_str_info_s fail = {.data = NULL};
++  if (ws_compress_fn) {
++    if (ws_z_out.size < in.len) {
++      void *tmp = realloc(ws_z_out.data, in.len);
++      if (!tmp)
++        return fail;
++      ws_z_out = (struct buffer_s){.data = tmp, .size = in.len};
++    }
++    const size_t n =
++        ws_compress_fn(in.data, in.len, ws_z_out.data, in.len, ws_deflate_level);
++    return n ? (fio_str_info_s){.data = ws_z_out.data, .len = n} : fail;
++  }
+   z_stream *z = ws_z_deflate;
+   if (!z) {
+     z = calloc(1, sizeof(*z));
+@@ -229,8 +248,46 @@ static fio_str_info_s ws_deflate_msg(fio_str_info_s in) {
+ }
+ 
+ /* Expands one message. Returns 0, -1 for bad data or -2 when over `limit`. */
++static __thread struct buffer_s ws_z_tail;
+ static int ws_inflate_msg(fio_str_info_s in, size_t limit,
+                           fio_str_info_s *out) {
++  if (ws_decompress_fn) {
++    /* the 00 00 ff ff the sender removed, then an empty final block */
++    static const uint8_t tail[6] = {0, 0, 0xff, 0xff, 0x03, 0x00};
++    if (ws_z_tail.size < in.len + 6) {
++      void *tmp = realloc(ws_z_tail.data, in.len + 6);
++      if (!tmp)
++        return -1;
++      ws_z_tail = (struct buffer_s){.data = tmp, .size = in.len + 6};
++    }
++    memcpy(ws_z_tail.data, in.data, in.len);
++    memcpy((uint8_t *)ws_z_tail.data + in.len, tail, 6);
++    if (!ws_z_in.size) {
++      ws_z_in.data = malloc(16384);
++      if (!ws_z_in.data)
++        return -1;
++      ws_z_in.size = 16384;
++    }
++    for (;;) {
++      size_t got = 0;
++      const int r = ws_decompress_fn(ws_z_tail.data, in.len + 6, ws_z_in.data,
++                                     ws_z_in.size, &got);
++      if (r == 0) {
++        if (got > limit)
++          return -2;
++        *out = (fio_str_info_s){.data = ws_z_in.data, .len = got};
++        return 0;
++      }
++      if (r != 1)
++        return -1;
++      if (ws_z_in.size > limit)
++        return -2;
++      void *tmp = realloc(ws_z_in.data, ws_z_in.size << 1);
++      if (!tmp)
++        return -1;
++      ws_z_in = (struct buffer_s){.data = tmp, .size = ws_z_in.size << 1};
++    }
++  }
+   z_stream *z = ws_z_inflate;
+   if (!z) {
+     z = calloc(1, sizeof(*z));
+diff --git a/lib/facil/http/websockets.h b/lib/facil/http/websockets.h
+index 03f1366..6bf8d90 100644
+--- a/lib/facil/http/websockets.h
++++ b/lib/facil/http/websockets.h
+@@ -43,6 +43,17 @@ void websocket_validate_utf8_set(int enable);
+  * `min_size` are sent uncompressed. */
+ void websocket_deflate_set(int enable, int level, size_t min_size);
+ int websocket_deflate_enabled(void);
++/** Replaces zlib for permessage-deflate. `compress` writes `in` at `level` as
++ * raw DEFLATE ending in a sync flush with its 00 00 ff ff removed, and returns
++ * the length, or 0 when it does not fit in `cap`. `decompress` expands a whole raw stream into `out` and
++ * returns 0 (length in `*got`), 1 when `cap` is too small, or another value
++ * for bad data. Both may run on any thread at once. Set before serving. */
++typedef size_t (*websocket_compress_fn)(const void *in, size_t len, void *out,
++                                        size_t cap, int level);
++typedef int (*websocket_decompress_fn)(const void *in, size_t len, void *out,
++                                       size_t cap, size_t *got);
++void websocket_deflate_codec_set(websocket_compress_fn compress,
++                                 websocket_decompress_fn decompress);
+ 
+ /** What a broadcast does with a subscriber whose unsent bytes pass the limit. */
+ enum {

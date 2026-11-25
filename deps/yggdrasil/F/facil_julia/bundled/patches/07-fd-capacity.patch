@@ -1,0 +1,33 @@
+diff --git a/lib/facil/fio.c b/lib/facil/fio.c
+index 397bc20..6ef7039 100644
+--- a/lib/facil/fio.c
++++ b/lib/facil/fio.c
+@@ -3967,14 +3967,21 @@ static void __attribute__((constructor)) fio_lib_init(void) {
+       perror("\terrno:");
+     } else {
+       rlim_t original = rlim.rlim_cur;
+-      rlim.rlim_cur = rlim.rlim_max;
+-      if (rlim.rlim_cur > FIO_MAX_SOCK_CAPACITY) {
+-        rlim.rlim_cur = rlim.rlim_max = FIO_MAX_SOCK_CAPACITY;
++      rlim_t want = FIO_MAX_SOCK_CAPACITY;
++      const char *env_capa = getenv("FIO_CAPA");
++      if (env_capa && atol(env_capa) > 0)
++        want = (rlim_t)atol(env_capa);
++      if (want > rlim.rlim_max)
++        want = rlim.rlim_max;
++      /* the hard limit is left alone; the soft limit is only ever raised */
++      if (want > original) {
++        rlim.rlim_cur = want;
++        while (setrlimit(RLIMIT_NOFILE, &rlim) == -1 && rlim.rlim_cur > original)
++          --rlim.rlim_cur;
++        getrlimit(RLIMIT_NOFILE, &rlim);
++        want = rlim.rlim_cur;
+       }
+-      while (setrlimit(RLIMIT_NOFILE, &rlim) == -1 && rlim.rlim_cur > original)
+-        --rlim.rlim_cur;
+-      getrlimit(RLIMIT_NOFILE, &rlim);
+-      capa = rlim.rlim_cur;
++      capa = want;
+       if (capa > 1024) /* leave a slice of room */
+         capa -= 16;
+     }

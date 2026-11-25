@@ -1,0 +1,83 @@
+diff --git a/lib/facil/fio.c b/lib/facil/fio.c
+index 7203fb5..0d0c548 100644
+--- a/lib/facil/fio.c
++++ b/lib/facil/fio.c
+@@ -1170,7 +1170,8 @@ static inline void fio_mark_time(void) {
+ 
+ /** Calculates the due time for a task, given it's interval */
+ static struct timespec fio_timer_calc_due(size_t interval) {
+-  struct timespec now = fio_last_tick();
++  struct timespec now;
++  clock_gettime(CLOCK_REALTIME, &now);
+   if (interval >= 1000) {
+     unsigned long long secs = interval / 1000;
+     now.tv_sec += secs;
+@@ -1209,6 +1210,24 @@ static size_t fio_timer_calc_first_interval(void) {
+   return interval;
+ }
+ 
++/* Nanoseconds from now to the first timer: -1 without timers, 0 when one is due. */
++static int64_t fio_timer_first_ns(void) {
++  int64_t ns = -1;
++  fio_lock(&fio_timer_lock);
++  if (fio_ls_embd_any(&fio_timers)) {
++    struct timespec now;
++    clock_gettime(CLOCK_REALTIME, &now);
++    struct timespec due =
++        FIO_LS_EMBD_OBJ(fio_timer_s, node, fio_timers.next)->due;
++    ns = (int64_t)(due.tv_sec - now.tv_sec) * 1000000000LL +
++         (int64_t)(due.tv_nsec - now.tv_nsec);
++    if (ns < 0)
++      ns = 0;
++  }
++  fio_unlock(&fio_timer_lock);
++  return ns;
++}
++
+ /* simple a<=>b if "a" is bigger a negative result is returned, eq == 0. */
+ static int fio_timer_compare(struct timespec a, struct timespec b) {
+   if (a.tv_sec == b.tv_sec) {
+@@ -1848,21 +1867,40 @@ FIO_FUNC inline void fio_poll_remove_fd(intptr_t fd) {
+   } while (errno == EINTR);
+ }
+ 
++#ifndef NOTE_CRITICAL
++#define NOTE_CRITICAL 0
++#endif
++
+ static size_t fio_poll(void) {
+   if (evio_fd < 0)
+     return -1;
+   int timeout_millisec = fio_timer_calc_first_interval();
+   struct kevent events[FIO_POLL_MAX_EVENTS] = {{0}};
+ 
+-  const struct timespec timeout = {
++  struct timespec timeout = {
+       .tv_sec = (timeout_millisec / 1000),
+-      .tv_nsec = ((timeout_millisec & (~1023UL)) * 1000000)};
++      .tv_nsec = ((timeout_millisec % 1000) * 1000000)};
++  struct kevent arm;
++  int n_arm = 0;
++  int64_t first_ns = fio_defer_has_queue() ? 0 : fio_timer_first_ns();
++  if (first_ns == 0) {
++    timeout.tv_sec = 0;
++    timeout.tv_nsec = 0;
++  } else if (first_ns > 0 && first_ns < (int64_t)FIO_POLL_TICK * 1000000LL) {
++    EV_SET(&arm, (uintptr_t)-7, EVFILT_TIMER, EV_ADD | EV_ONESHOT,
++           NOTE_NSECONDS | NOTE_CRITICAL, first_ns, NULL);
++    n_arm = 1;
++    timeout.tv_sec = 1;
++    timeout.tv_nsec = 0;
++  }
+   /* wait for events and handle them */
+   int active_count =
+-      kevent(evio_fd, NULL, 0, events, FIO_POLL_MAX_EVENTS, &timeout);
++      kevent(evio_fd, &arm, n_arm, events, FIO_POLL_MAX_EVENTS, &timeout);
+ 
+   if (active_count > 0) {
+     for (int i = 0; i < active_count; i++) {
++      if (events[i].filter == EVFILT_TIMER)
++        continue;
+       // test for event(s) type
+       if (events[i].filter == EVFILT_WRITE) {
+         fio_defer_push_urgent(deferred_on_ready,

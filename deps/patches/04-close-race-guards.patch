@@ -1,0 +1,70 @@
+diff --git a/lib/facil/fio.c b/lib/facil/fio.c
+index 9c06194..0a06d02 100644
+--- a/lib/facil/fio.c
++++ b/lib/facil/fio.c
+@@ -358,6 +358,9 @@ static inline int fio_clear_fd_if(intptr_t fd, uint8_t is_open, uint8_t check,
+ }
+ 
+ static inline void fio_force_close_in_poll(intptr_t uuid) {
++  /* an event may outlive its connection: the descriptor is then someone else's */
++  if (!uuid_data(uuid).open)
++    return;
+   uuid_data(uuid).close = 2;
+   fio_force_close(uuid);
+ }
+@@ -2954,21 +2957,28 @@ ssize_t fio_read(intptr_t uuid, void *buffer, size_t count) {
+   }
+   if (count == 0)
+     return 0;
++  /* The lock is held across the hook: closing the connection frees the hook's
++   * state, and must wait for a read in progress on another thread. */
+   fio_lock(&uuid_data(uuid).sock_lock);
++  if (!uuid_is_valid(uuid) || !uuid_data(uuid).open) {
++    fio_unlock(&uuid_data(uuid).sock_lock);
++    errno = EBADF;
++    return -1;
++  }
+   ssize_t (*rw_read)(intptr_t, void *, void *, size_t) =
+       uuid_data(uuid).rw_hooks->read;
+   void *udata = uuid_data(uuid).rw_udata;
+-  fio_unlock(&uuid_data(uuid).sock_lock);
+   int old_errno = errno;
+   ssize_t ret;
+ retry_int:
+   ret = rw_read(uuid, udata, buffer, count);
++  if (ret < 0 && errno == EINTR)
++    goto retry_int;
++  fio_unlock(&uuid_data(uuid).sock_lock);
+   if (ret > 0) {
+     fio_touch(uuid);
+     return ret;
+   }
+-  if (ret < 0 && errno == EINTR)
+-    goto retry_int;
+   if (ret < 0 &&
+       (errno == EWOULDBLOCK || errno == EAGAIN || errno == ENOTCONN)) {
+     errno = old_errno;
+@@ -3235,14 +3245,22 @@ void fio_force_close(intptr_t uuid) {
+     packet = packet->next;
+     fio_packet_free(tmp);
+   }
+-  /* check for rw-hooks termination packet */
++  /* check for rw-hooks termination packet, unless another thread closed the
++   * connection meanwhile: the hook's state is freed with it */
++  fio_lock(&uuid_data(uuid).sock_lock);
++  if (!uuid_is_valid(uuid)) {
++    fio_unlock(&uuid_data(uuid).sock_lock);
++    return;
++  }
+   if (uuid_data(uuid).open && (uuid_data(uuid).close & 1) &&
+       uuid_data(uuid).rw_hooks->before_close(uuid, uuid_data(uuid).rw_udata)) {
+     uuid_data(uuid).close = 2; /* don't repeat the before_close callback */
++    fio_unlock(&uuid_data(uuid).sock_lock);
+     fio_touch(uuid);
+     fio_poll_add_write(fio_uuid2fd(uuid));
+     return;
+   }
++  fio_unlock(&uuid_data(uuid).sock_lock);
+   fio_lock(&uuid_data(uuid).protocol_lock);
+   const int lost_race =
+       fio_clear_fd_if(fio_uuid2fd(uuid), 0, 1, (uint8_t)((uintptr_t)uuid & 0xFF));

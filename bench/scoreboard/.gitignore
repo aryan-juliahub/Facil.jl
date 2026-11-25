@@ -1,0 +1,7 @@
+bin/
+data/
+results/
+node/node_modules/
+facil/sysimage/facil_sys.dylib
+facil/sysimage/Project.toml
+facil/sysimage/Manifest.toml

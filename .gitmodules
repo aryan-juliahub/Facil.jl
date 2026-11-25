@@ -1,0 +1,3 @@
+[submodule "deps/facil.io"]
+	path = deps/facil.io
+	url = https://github.com/boazsegev/facil.io

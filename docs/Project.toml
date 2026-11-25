@@ -1,0 +1,11 @@
+[deps]
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+Facil = "8f23c55f-9d0e-4d29-b780-45826f841142"
+HttpTypes = "b4415c9e-73f1-48a2-913c-7fe2498276e8"
+
+[sources]
+Facil = {path = ".."}
+HttpTypes = {path = "../lib/HttpTypes"}
+
+[compat]
+Documenter = "1"

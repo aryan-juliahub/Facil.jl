@@ -1,0 +1,417 @@
+diff --git a/lib/facil/fio.c b/lib/facil/fio.c
+--- a/lib/facil/fio.c
++++ b/lib/facil/fio.c
+@@ -780,6 +780,63 @@
+ }
+ 
+ static size_t fio_poll(void);
++static int fio_poll_idle(void);
++int fio_defer_has_queue(void);
++
++/* Timer tasks queued or running: such a timer is back in the list only once
++ * its task ends, so meanwhile the poll wakes every millisecond to look. */
++static volatile size_t fio_timers_inflight;
++
++#ifndef FIO_DEFER_IDLE_WAIT_MS
++#define FIO_DEFER_IDLE_WAIT_MS 100
++#endif
++
++/* Idle pool threads sleep on a condition variable; a task push wakes one.
++ * `woken` counts signals not yet taken, so a burst of pushes wakes each
++ * sleeper once. */
++static pthread_mutex_t fio_idle_lock = PTHREAD_MUTEX_INITIALIZER;
++static pthread_cond_t fio_idle_cond = PTHREAD_COND_INITIALIZER;
++static size_t fio_idle_waiting;
++static size_t fio_idle_woken;
++
++static void fio_idle_wake(void) {
++  __atomic_thread_fence(__ATOMIC_SEQ_CST);
++  if (__atomic_load_n(&fio_idle_waiting, __ATOMIC_SEQ_CST) <=
++      __atomic_load_n(&fio_idle_woken, __ATOMIC_RELAXED))
++    return;
++  pthread_mutex_lock(&fio_idle_lock);
++  if (fio_idle_waiting > fio_idle_woken) {
++    ++fio_idle_woken;
++    pthread_cond_signal(&fio_idle_cond);
++  }
++  pthread_mutex_unlock(&fio_idle_lock);
++}
++
++static void fio_idle_wake_all(void) {
++  pthread_mutex_lock(&fio_idle_lock);
++  fio_idle_woken = fio_idle_waiting;
++  pthread_cond_broadcast(&fio_idle_cond);
++  pthread_mutex_unlock(&fio_idle_lock);
++}
++
++static void fio_idle_wait(void) {
++  pthread_mutex_lock(&fio_idle_lock);
++  __atomic_add_fetch(&fio_idle_waiting, 1, __ATOMIC_SEQ_CST);
++  __atomic_thread_fence(__ATOMIC_SEQ_CST);
++  if (!fio_defer_has_queue() && fio_is_running()) {
++    struct timespec until;
++    clock_gettime(CLOCK_REALTIME, &until);
++    until.tv_nsec += FIO_DEFER_IDLE_WAIT_MS * 1000000L;
++    until.tv_sec += until.tv_nsec / 1000000000L;
++    until.tv_nsec %= 1000000000L;
++    pthread_cond_timedwait(&fio_idle_cond, &fio_idle_lock, &until);
++  }
++  __atomic_sub_fetch(&fio_idle_waiting, 1, __ATOMIC_SEQ_CST);
++  if (fio_idle_woken)
++    --fio_idle_woken;
++  pthread_mutex_unlock(&fio_idle_lock);
++}
++
+ /**
+  * A thread entering this function should wait for new evennts.
+  */
+@@ -790,14 +847,8 @@
+ #endif
+   if (FIO_DEFER_THROTTLE_POLL) {
+     fio_thread_suspend();
+-  } else {
+-    /* keeps threads active (concurrent), but reduces performance */
+-    static __thread size_t static_throttle = 262143UL;
+-    fio_throttle_thread(static_throttle);
+-    if (fio_defer_has_queue())
+-      static_throttle = 1;
+-    else if (static_throttle < FIO_DEFER_THROTTLE_LIMIT)
+-      static_throttle = (static_throttle << 1);
++  } else if (!fio_poll_idle()) {
++    fio_idle_wait();
+   }
+ }
+ 
+@@ -808,6 +859,8 @@
+ static inline void fio_defer_thread_signal(void) {
+   if (FIO_DEFER_THROTTLE_POLL)
+     fio_thread_signal();
++  else
++    fio_idle_wake();
+ }
+ static inline void fio_defer_on_thread_end(void) {
+   if (FIO_DEFER_THROTTLE_POLL) {
+@@ -862,6 +915,25 @@
+ #endif
+ #endif
+ 
++/* Hot shared locks spin briefly before yielding: their holders keep them for
++ * a few instructions, far less than a sleep. */
++static inline void fio_lock_hot(fio_lock_i *lock) {
++  for (size_t i = 0; fio_trylock(lock); ++i) {
++    if (i >= 128) {
++      fio_reschedule_thread();
++      continue;
++    }
++    while (fio_is_locked(lock) && i < 128) {
++#if defined(__aarch64__) || defined(__arm64__)
++      __asm__ volatile("yield");
++#elif defined(__x86_64__) || defined(__i386__)
++      __asm__ volatile("pause");
++#endif
++      ++i;
++    }
++  }
++}
++
+ /* task node data */
+ typedef struct {
+   void (*func)(void *, void *);
+@@ -920,7 +992,7 @@
+ 
+ static inline void fio_defer_push_task_fn(fio_defer_task_s task,
+                                           fio_task_queue_s *queue) {
+-  fio_lock(&queue->lock);
++  fio_lock_hot(&queue->lock);
+ 
+   /* test if full */
+   if (queue->writer->state && queue->writer->write == queue->writer->read) {
+@@ -965,9 +1037,12 @@
+ 
+ #if FIO_USE_URGENT_QUEUE
+ #define fio_defer_push_urgent(func_, arg1_, arg2_)                             \
+-  fio_defer_push_task_fn(                                                      \
+-      (fio_defer_task_s){.func = func_, .arg1 = arg1_, .arg2 = arg2_},         \
+-      &task_queue_urgent)
++  do {                                                                         \
++    fio_defer_push_task_fn(                                                    \
++        (fio_defer_task_s){.func = func_, .arg1 = arg1_, .arg2 = arg2_},       \
++        &task_queue_urgent);                                                   \
++    fio_defer_thread_signal();                                                 \
++  } while (0)
+ #else
+ #define fio_defer_push_urgent(func_, arg1_, arg2_)                             \
+   fio_defer_push_task(func_, arg1_, arg2_)
+@@ -977,7 +1052,7 @@
+   fio_defer_task_s ret = (fio_defer_task_s){.func = NULL};
+   fio_defer_queue_block_s *to_free = NULL;
+   /* lock the state machine, grab/create a task and place it at the tail */
+-  fio_lock(&queue->lock);
++  fio_lock_hot(&queue->lock);
+ 
+   /* empty? */
+   if (queue->reader->write == queue->reader->read && !queue->reader->state)
+@@ -1048,6 +1123,7 @@
+ }
+ 
+ static inline void fio_defer_clear_tasks(void) {
++  fio_timers_inflight = 0;
+   fio_defer_clear_tasks_for_queue(&task_queue_normal);
+ #if FIO_USE_URGENT_QUEUE
+   fio_defer_clear_tasks_for_queue(&task_queue_urgent);
+@@ -1233,7 +1309,7 @@
+   if (fio_defer_has_queue())
+     return 0;
+   if (fio_ls_embd_is_empty(&fio_timers)) {
+-    return FIO_POLL_TICK;
++    return fio_timers_inflight ? 1 : FIO_POLL_TICK;
+   }
+   struct timespec now = fio_last_tick();
+   struct timespec due =
+@@ -1249,6 +1325,8 @@
+   }
+   if (interval > FIO_POLL_TICK)
+     interval = FIO_POLL_TICK;
++  if (fio_timers_inflight && interval > 1)
++    interval = 1;
+   return interval;
+ }
+ 
+@@ -1267,6 +1345,8 @@
+       ns = 0;
+   }
+   fio_unlock(&fio_timer_lock);
++  if (fio_timers_inflight && (ns < 0 || ns > 1000000))
++    ns = 1000000;
+   return ns;
+ }
+ 
+@@ -1310,10 +1390,12 @@
+   if (timer->on_finish)
+     timer->on_finish(timer->arg);
+   free(timer);
++  fio_atomic_sub(&fio_timers_inflight, 1);
+   return;
+   (void)ignr;
+ reschedule:
+   fio_timer_add_order(timer);
++  fio_atomic_sub(&fio_timers_inflight, 1);
+ }
+ 
+ /** schedules all timers that are due to be performed. */
+@@ -1325,6 +1407,7 @@
+              FIO_LS_EMBD_OBJ(fio_timer_s, node, fio_timers.next)->due, now) >=
+              0) {
+     fio_ls_embd_s *tmp = fio_ls_embd_remove(fio_timers.next);
++    fio_atomic_add(&fio_timers_inflight, 1);
+     fio_defer(fio_timer_perform_single, FIO_LS_EMBD_OBJ(fio_timer_s, node, tmp),
+               NULL);
+   }
+@@ -1774,6 +1857,8 @@
+   epoll_ctl(evio_fd[1], EPOLL_CTL_DEL, fd, &chevent);
+   epoll_ctl(evio_fd[2], EPOLL_CTL_DEL, fd, &chevent);
+ }
++
++static int fio_poll_idle(void) { return 0; }
+ 
+ static size_t fio_poll(void) {
+   int timeout_millisec = fio_timer_calc_first_interval();
+@@ -1869,7 +1954,7 @@
+  * connection is recognized as stale instead of acting on the fd's next user. */
+ static inline void fio_poll_add_read(intptr_t fd) {
+   struct kevent chevent[1];
+-  EV_SET(chevent, fd, EVFILT_READ, EV_ADD | EV_ENABLE | EV_CLEAR | EV_ONESHOT,
++  EV_SET(chevent, fd, EVFILT_READ, EV_ADD | EV_ENABLE | EV_CLEAR | EV_DISPATCH,
+          0, 0, ((void *)fd2uuid(fd)));
+   do {
+     errno = 0;
+@@ -1880,7 +1965,7 @@
+ 
+ static inline void fio_poll_add_write(intptr_t fd) {
+   struct kevent chevent[1];
+-  EV_SET(chevent, fd, EVFILT_WRITE, EV_ADD | EV_ENABLE | EV_CLEAR | EV_ONESHOT,
++  EV_SET(chevent, fd, EVFILT_WRITE, EV_ADD | EV_ENABLE | EV_CLEAR | EV_DISPATCH,
+          0, 0, ((void *)fd2uuid(fd)));
+   do {
+     errno = 0;
+@@ -1891,10 +1976,10 @@
+ 
+ static inline void fio_poll_add(intptr_t fd) {
+   struct kevent chevent[2];
+-  EV_SET(chevent, fd, EVFILT_READ, EV_ADD | EV_ENABLE | EV_CLEAR | EV_ONESHOT,
++  EV_SET(chevent, fd, EVFILT_READ, EV_ADD | EV_ENABLE | EV_CLEAR | EV_DISPATCH,
+          0, 0, ((void *)fd2uuid(fd)));
+   EV_SET(chevent + 1, fd, EVFILT_WRITE,
+-         EV_ADD | EV_ENABLE | EV_CLEAR | EV_ONESHOT, 0, 0, ((void *)fd2uuid(fd)));
++         EV_ADD | EV_ENABLE | EV_CLEAR | EV_DISPATCH, 0, 0, ((void *)fd2uuid(fd)));
+   do {
+     errno = 0;
+     kevent(evio_fd, chevent, 2, NULL, 0, NULL);
+@@ -1927,11 +2012,30 @@
+ static uint8_t fio_poll_waiting;
+ static fio_lock_i fio_poll_changes_lock = FIO_LOCK_INIT;
+ 
++/* Moves the queued re-arms of still open connections into `changes`. */
++static int fio_poll_take_changes_unsafe(struct kevent *changes) {
++  int n = 0;
++  for (int i = 0; i < fio_poll_changes_n; ++i) {
++    const intptr_t u = (intptr_t)fio_poll_changes[i].udata;
++    if (uuid_is_valid(u) && uuid_data(u).open)
++      changes[n++] = fio_poll_changes[i];
++  }
++  fio_poll_changes_n = 0;
++  return n;
++}
++
++/* With a thread pool, a re-arm is made at once by the thread that finished
++ * with the connection (under its socket lock), so the poller's call stays
++ * short and no registration outlives the uuid it names. */
+ static inline void fio_poll_rearm_read(intptr_t fd) {
+-  fio_lock(&fio_poll_changes_lock);
++  if (fio_data->threads > 1) {
++    fio_poll_add_read(fd);
++    return;
++  }
++  fio_lock_hot(&fio_poll_changes_lock);
+   if (!fio_poll_waiting && fio_poll_changes_n < FIO_POLL_CHANGES) {
+     EV_SET(fio_poll_changes + fio_poll_changes_n, fd, EVFILT_READ,
+-           EV_ADD | EV_ENABLE | EV_CLEAR | EV_ONESHOT, 0, 0,
++           EV_ADD | EV_ENABLE | EV_CLEAR | EV_DISPATCH, 0, 0,
+            ((void *)fd2uuid(fd)));
+     ++fio_poll_changes_n;
+     fio_unlock(&fio_poll_changes_lock);
+@@ -1941,6 +2045,63 @@
+   fio_poll_add_read(fd);
+ }
+ 
++static void fio_poll_dispatch(struct kevent *events, int n, int idle);
++
++/* Set while the last poll filled its event array: ready connections are
++ * waiting in the kernel. */
++static volatile uint8_t fio_poll_backlog;
++
++/* A pool thread that runs out of tasks while connections are waiting polls
++ * without blocking before it sleeps, instead of waiting for the cycle task. */
++static int fio_poll_idle(void) {
++  if (evio_fd < 0 || !fio_poll_backlog)
++    return 0;
++  struct kevent events[FIO_POLL_MAX_EVENTS];
++  const struct timespec zero = {.tv_sec = 0, .tv_nsec = 0};
++  int n = kevent(evio_fd, NULL, 0, events, FIO_POLL_MAX_EVENTS, &zero);
++  fio_poll_backlog = (n == FIO_POLL_MAX_EVENTS);
++  if (n <= 0)
++    return 0;
++  fio_poll_dispatch(events, n, 1);
++  return 1;
++}
++
++/* The cycle task's poll may block until the next timer. A timer event taken
++ * by an idle poll instead schedules the due timers and arms the next one. */
++static void fio_poll_timer_fired(void) {
++  fio_mark_time();
++  fio_timer_schedule();
++  int64_t first_ns = fio_timer_first_ns();
++  if (first_ns >= 0 && first_ns < (int64_t)FIO_POLL_TICK * 1000000LL) {
++    struct kevent arm;
++    EV_SET(&arm, (uintptr_t)-7, EVFILT_TIMER, EV_ADD | EV_ONESHOT,
++           NOTE_NSECONDS | NOTE_CRITICAL, first_ns, NULL);
++    kevent(evio_fd, &arm, 1, NULL, 0, NULL);
++  }
++}
++
++static void fio_poll_dispatch(struct kevent *events, int n, int idle) {
++  for (int i = 0; i < n; i++) {
++    if (events[i].filter == EVFILT_TIMER) {
++      if (idle)
++        fio_poll_timer_fired();
++      continue;
++    }
++    const intptr_t uuid = (intptr_t)events[i].udata;
++    if (!uuid_is_valid(uuid) || !uuid_data(uuid).open)
++      continue;
++    // test for event(s) type
++    if (events[i].filter == EVFILT_WRITE) {
++      fio_defer_push_urgent(deferred_on_ready, ((void *)uuid), NULL);
++    } else if (events[i].filter == EVFILT_READ) {
++      fio_defer_push_task(deferred_on_data, (void *)uuid, NULL);
++    }
++    if (events[i].flags & (EV_EOF | EV_ERROR)) {
++      fio_force_close_in_poll(uuid);
++    }
++  }
++}
++
+ static size_t fio_poll(void) {
+   if (evio_fd < 0)
+     return -1;
+@@ -1966,41 +2127,21 @@
+   /* wait for events and handle them, submitting the queued re-arms; one
+    * whose connection closed meanwhile is dropped */
+   struct kevent changes[FIO_POLL_CHANGES + 1];
+-  int n_changes = 0;
+-  fio_lock(&fio_poll_changes_lock);
+-  for (int i = 0; i < fio_poll_changes_n; ++i) {
+-    const intptr_t u = (intptr_t)fio_poll_changes[i].udata;
+-    if (uuid_is_valid(u) && uuid_data(u).open)
+-      changes[n_changes++] = fio_poll_changes[i];
+-  }
+-  fio_poll_changes_n = 0;
++  fio_lock_hot(&fio_poll_changes_lock);
++  int n_changes = fio_poll_take_changes_unsafe(changes);
+   fio_poll_waiting = 1;
+   fio_unlock(&fio_poll_changes_lock);
+   if (n_arm)
+     changes[n_changes++] = arm;
+   int active_count = kevent(evio_fd, changes, n_changes, events,
+                             FIO_POLL_MAX_EVENTS, &timeout);
+-  fio_lock(&fio_poll_changes_lock);
++  fio_lock_hot(&fio_poll_changes_lock);
+   fio_poll_waiting = 0;
+   fio_unlock(&fio_poll_changes_lock);
+ 
++  fio_poll_backlog = (active_count == FIO_POLL_MAX_EVENTS);
+   if (active_count > 0) {
+-    for (int i = 0; i < active_count; i++) {
+-      if (events[i].filter == EVFILT_TIMER)
+-        continue;
+-      const intptr_t uuid = (intptr_t)events[i].udata;
+-      if (!uuid_is_valid(uuid) || !uuid_data(uuid).open)
+-        continue;
+-      // test for event(s) type
+-      if (events[i].filter == EVFILT_WRITE) {
+-        fio_defer_push_urgent(deferred_on_ready, ((void *)uuid), NULL);
+-      } else if (events[i].filter == EVFILT_READ) {
+-        fio_defer_push_task(deferred_on_data, (void *)uuid, NULL);
+-      }
+-      if (events[i].flags & (EV_EOF | EV_ERROR)) {
+-        fio_force_close_in_poll(uuid);
+-      }
+-    }
++    fio_poll_dispatch(events, active_count, 0);
+   } else if (active_count < 0) {
+     if (errno == EINTR)
+       return 0;
+@@ -2097,6 +2238,8 @@
+   }
+   fio_unlock(&fio_data->lock);
+ }
++
++static int fio_poll_idle(void) { return 0; }
+ 
+ /** returns non-zero if events were scheduled, 0 if idle */
+ static size_t fio_poll(void) {
+@@ -4398,9 +4541,13 @@
+ static void fio_cycle(void *ignr, void *ignr2) {
+   fio_cycle_schedule_events();
+   if (fio_data->active) {
+-    fio_defer_push_task(fio_cycle, ignr, ignr2);
++    /* the thread that polled runs the queue next, so no sleeper is woken */
++    fio_defer_push_task_fn(
++        (fio_defer_task_s){.func = fio_cycle, .arg1 = ignr, .arg2 = ignr2},
++        &task_queue_normal);
+     return;
+   }
++  fio_idle_wake_all();
+   return;
+ }
+ 

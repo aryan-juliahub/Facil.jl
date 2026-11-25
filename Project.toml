@@ -1,0 +1,40 @@
+name = "Facil"
+uuid = "8f23c55f-9d0e-4d29-b780-45826f841142"
+version = "0.1.0"
+
+[deps]
+HttpTypes = "b4415c9e-73f1-48a2-913c-7fe2498276e8"
+Libdl = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
+OpenSSL_jll = "458c3c95-2e84-50aa-8efc-19380b2a3a95"
+PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
+Preferences = "21216c6a-2e73-6563-6e65-726566657250"
+Scratch = "6c6a2e73-6563-6170-7368-637461726353"
+Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
+ZlibNG_jll = "c62bbaca-5768-5b75-85e2-9a0ea54e1624"
+Zstd_jll = "3161d3a3-bdf6-5164-811a-617609db77b4"
+brotli_jll = "4611771a-a7d2-5e23-8d00-b1becdba1aae"
+libdeflate_jll = "46979653-d7f6-5232-b59e-dd310c4598de"
+
+[sources]
+HttpTypes = {path = "lib/HttpTypes"}
+
+[compat]
+HttpTypes = "0.1"
+Libdl = "1"
+OpenSSL_jll = "3"
+PrecompileTools = "1"
+Preferences = "1"
+Scratch = "1"
+ZlibNG_jll = "2"
+Zstd_jll = "1.5"
+brotli_jll = "1.1"
+libdeflate_jll = "1.20"
+julia = "1.10"
+
+[extras]
+Downloads = "f43a241f-c20a-4ad4-852c-f6b1247861c6"
+Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Downloads", "Sockets", "Test"]

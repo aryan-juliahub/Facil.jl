@@ -1,0 +1,33 @@
+/deps/build/
+/deps/usr/
+Manifest.toml
+*.dylib
+*.so
+*.so.*
+*.o
+*.a
+*.dSYM/
+.DS_Store
+
+# docs build output
+/docs/build/
+
+# scoreboard: installed Node packages, compiled clients, generated payloads and
+# certificates (build.sh recreates them), sysimages and per-run results
+/bench/scoreboard/node/node_modules/
+/bench/scoreboard/bin/
+/bench/scoreboard/data/
+/bench/scoreboard/facil/sysimage/*.dylib
+/bench/scoreboard/facil/sysimage/*.so
+/bench/scoreboard/facil/sysimage/*.dll
+/bench/scoreboard/results/
+/bench/scoreboard/clients/*
+!/bench/scoreboard/clients/*.c
+!/bench/scoreboard/clients/*.h
+!/bench/scoreboard/clients/*.js
+!/bench/scoreboard/clients/*.mjs
+
+# patch-suite scratch output (normally written under $TMPDIR)
+/test/patches/**/work/
+/test/patches/**/*.log
+/test/patches/**/*.out

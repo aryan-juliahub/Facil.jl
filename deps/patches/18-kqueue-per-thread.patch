@@ -1,0 +1,580 @@
+--- a/lib/facil/fio.c
++++ b/lib/facil/fio.c
+@@ -781,6 +781,27 @@
+ 
+ static size_t fio_poll(void);
+ static int fio_poll_idle(void);
++#if FIO_ENGINE_KQUEUE
++static int fio_poll_own_wait(void);
++static int fio_poll_own_wake(int all);
++static void fio_poll_threads_begin(void);
++static void fio_poll_threads_end(void);
++static void fio_poll_threads_teardown(void);
++static void fio_poll_thread_enter(void);
++static void fio_poll_thread_leave(void);
++static void fio_poll_own_peek(void);
++static void fio_poll_close_fd(intptr_t fd);
++#else
++#define fio_poll_own_wait() 0
++#define fio_poll_own_wake(all) 0
++#define fio_poll_threads_begin()
++#define fio_poll_threads_end()
++#define fio_poll_threads_teardown()
++#define fio_poll_thread_enter()
++#define fio_poll_thread_leave()
++#define fio_poll_own_peek()
++#define fio_poll_close_fd(fd) close(fd)
++#endif
+ int fio_defer_has_queue(void);
+ 
+ /* Timer tasks queued or running: such a timer is back in the list only once
+@@ -813,6 +834,7 @@
+ }
+ 
+ static void fio_idle_wake_all(void) {
++  fio_poll_own_wake(1);
+   pthread_mutex_lock(&fio_idle_lock);
+   fio_idle_woken = fio_idle_waiting;
+   pthread_cond_broadcast(&fio_idle_cond);
+@@ -847,6 +869,7 @@
+ #endif
+   if (FIO_DEFER_THROTTLE_POLL) {
+     fio_thread_suspend();
++  } else if (fio_poll_own_wait()) {
+   } else if (!fio_poll_idle()) {
+     fio_idle_wait();
+   }
+@@ -859,7 +882,7 @@
+ static inline void fio_defer_thread_signal(void) {
+   if (FIO_DEFER_THROTTLE_POLL)
+     fio_thread_signal();
+-  else
++  else if (!fio_poll_own_wake(0))
+     fio_idle_wake();
+ }
+ static inline void fio_defer_on_thread_end(void) {
+@@ -1193,15 +1216,31 @@
+ /** Clears the queue. */
+ void fio_defer_clear_queue(void) { fio_defer_clear_tasks(); }
+ 
++/* Like `fio_defer_perform`, but a pool thread looks at its own kqueue every
++ * 16 tasks, so a long shared queue does not hold up its connections. */
++static void fio_defer_perform_pool(void) {
++  size_t n = 0;
++#if FIO_USE_URGENT_QUEUE
++  while (fio_defer_perform_single_task_for_queue(&task_queue_urgent) == 0 ||
++         fio_defer_perform_single_task_for_queue(&task_queue_normal) == 0)
++#else
++  while (fio_defer_perform_single_task_for_queue(&task_queue_normal) == 0)
++#endif
++    if (!(++n & 15))
++      fio_poll_own_peek();
++}
++
+ /* Thread pool task */
+ static void *fio_defer_cycle(void *ignr) {
+   fio_defer_on_thread_start();
++  fio_poll_thread_enter();
+   for (;;) {
+-    fio_defer_perform();
++    fio_defer_perform_pool();
+     if (!fio_is_running())
+       break;
+     fio_defer_thread_wait();
+   }
++  fio_poll_thread_leave();
+   fio_defer_on_thread_end();
+   return ignr;
+ }
+@@ -1940,7 +1979,257 @@
+ static int evio_fd = -1;
+ 
+ static void fio_poll_close(void) { close(evio_fd); }
++
++/* With a thread pool, each pool thread owns a kqueue and fd `n` belongs to
++ * kqueue `n % fio_kq_n`. Only the owner thread waits on that kqueue, changes
++ * the fd's registrations and closes it; other threads post to its inbox. */
++typedef struct {
++  fio_lock_i lock;
++  uint8_t sleeping;
++  uint8_t woken;
++  int n_chg, cap_chg, n_cls, cap_cls;
++  struct kevent *chg;
++  int *cls;
++} fio_kq_box_s;
++
++#define FIO_KQ_WAKE_IDENT ((uintptr_t)-9)
++static int fio_kq_n;
++static volatile uint8_t fio_kq_live;
++static int *fio_kq;
++static fio_kq_box_s *fio_kq_box;
++static volatile size_t fio_kq_sleepers;
++static size_t fio_kq_next_thread;
++static __thread int fio_kq_self = -1;
++static __thread uint8_t fio_kq_backlog;
++
++static inline int fio_kq_mine(void) {
++  return fio_kq_self >= 0 ? fio_kq[fio_kq_self] : evio_fd;
++}
++
++static void fio_kq_apply(int kq, const struct kevent *ch, int n) {
++  do {
++    errno = 0;
++    kevent(kq, ch, n, NULL, 0, NULL);
++  } while (errno == EINTR);
++}
++
++/* A change still applies while its uuid names an open connection. */
++static inline int fio_kq_change_live(const struct kevent *ch) {
++  const intptr_t u = (intptr_t)ch->udata;
++  return uuid_is_valid(u) && uuid_data(u).open;
++}
++
++static void fio_kq_trigger(int i) {
++  struct kevent u;
++  EV_SET(&u, FIO_KQ_WAKE_IDENT, EVFILT_USER, 0, NOTE_TRIGGER, 0, NULL);
++  fio_kq_apply(fio_kq[i], &u, 1);
++}
++
++static void fio_kq_grow(void **p, int *cap, size_t size) {
++  int c = *cap ? *cap * 2 : 64;
++  void *n = realloc(*p, c * size);
++  FIO_ASSERT_ALLOC(n);
++  *p = n;
++  *cap = c;
++}
++
++/* Posts a change (`ch`) or a close (`ch == NULL`) to the owner's inbox and
++ * wakes the owner if it sleeps. */
++static void fio_kq_post(int owner, const struct kevent *ch, int fd) {
++  fio_kq_box_s *b = fio_kq_box + owner;
++  fio_lock(&b->lock);
++  if (ch) {
++    if (b->n_chg == b->cap_chg)
++      fio_kq_grow((void **)&b->chg, &b->cap_chg, sizeof(*b->chg));
++    b->chg[b->n_chg++] = *ch;
++  } else {
++    if (b->n_cls == b->cap_cls)
++      fio_kq_grow((void **)&b->cls, &b->cap_cls, sizeof(*b->cls));
++    b->cls[b->n_cls++] = fd;
++  }
++  const int wake = b->sleeping && !b->woken;
++  if (wake)
++    b->woken = 1;
++  fio_unlock(&b->lock);
++  if (wake)
++    fio_kq_trigger(owner);
++}
++
++/* Changes made by the owner itself go to the kernel with its next wait. */
++#define FIO_KQ_LOCAL_CHANGES 256
++static __thread struct kevent fio_kq_local_chg[FIO_KQ_LOCAL_CHANGES];
++static __thread int fio_kq_local_n;
++
++static void fio_kq_change(intptr_t fd, struct kevent *ch, int n) {
++  if (!fio_kq_live) {
++    fio_kq_apply(fio_kq_n ? fio_kq[fd % fio_kq_n] : evio_fd, ch, n);
++    return;
++  }
++  const int owner = (int)(fd % fio_kq_n);
++  for (int i = 0; i < n; ++i) {
++    if (owner != fio_kq_self)
++      fio_kq_post(owner, ch + i, -1);
++    else if (fio_kq_local_n < FIO_KQ_LOCAL_CHANGES)
++      fio_kq_local_chg[fio_kq_local_n++] = ch[i];
++    else
++      fio_kq_apply(fio_kq[owner], ch + i, 1);
++  }
++}
++
++static void fio_poll_close_fd(intptr_t fd) {
++  if (!fio_kq_live || fd % fio_kq_n == fio_kq_self) {
++    close(fd);
++    return;
++  }
++  fio_kq_post((int)(fd % fio_kq_n), NULL, (int)fd);
++}
++
++/* Keeps a live change for the next wait; a deletion is made at once, since a
++ * failed one would come back as an error event and close the connection. */
++static inline int fio_kq_keep(int kq, const struct kevent *ch,
++                              struct kevent *out, int n) {
++  if (!fio_kq_change_live(ch))
++    return n;
++  if (ch->flags & EV_DELETE) {
++    fio_kq_apply(kq, ch, 1);
++    return n;
++  }
++  out[n] = *ch;
++  return n + 1;
++}
++
++static int fio_kq_take_local(struct kevent *out) {
++  int n = 0;
++  for (int i = 0; i < fio_kq_local_n; ++i)
++    n = fio_kq_keep(fio_kq[fio_kq_self], fio_kq_local_chg + i, out, n);
++  fio_kq_local_n = 0;
++  return n;
++}
++
++static void fio_poll_thread_enter(void) {
++  if (!fio_kq_live)
++    return;
++  size_t i = fio_atomic_add(&fio_kq_next_thread, 1) - 1;
++  if (i < (size_t)fio_kq_n)
++    fio_kq_self = (int)i;
++}
++
++static void fio_poll_thread_leave(void) {
++  if (fio_kq_self >= 0) {
++    struct kevent changes[FIO_KQ_LOCAL_CHANGES];
++    int n = fio_kq_take_local(changes);
++    if (n)
++      fio_kq_apply(fio_kq[fio_kq_self], changes, n);
++  }
++  fio_kq_self = -1;
++}
++
++/* Wakes one sleeping pool thread (all with `all`); returns 0 when pool
++ * threads do not sleep on their kqueues. */
++static int fio_poll_own_wake(int all) {
++  if (!fio_kq_live)
++    return 0;
++  __atomic_thread_fence(__ATOMIC_SEQ_CST);
++  if (!all && !__atomic_load_n(&fio_kq_sleepers, __ATOMIC_SEQ_CST))
++    return 1;
++  for (int i = 0; i < fio_kq_n; ++i) {
++    fio_kq_box_s *b = fio_kq_box + i;
++    if (!b->sleeping || b->woken)
++      continue;
++    fio_lock(&b->lock);
++    const int wake = b->sleeping && !b->woken;
++    if (wake)
++      b->woken = 1;
++    fio_unlock(&b->lock);
++    if (wake) {
++      fio_kq_trigger(i);
++      if (!all)
++        return 1;
++    }
++  }
++  return 1;
++}
++
++static void fio_kq_migrate(intptr_t fd) {
++  struct kevent ch[2];
++  EV_SET(ch, fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
++  fio_kq_apply(evio_fd, ch, 1);
++  EV_SET(ch, fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
++  fio_kq_apply(evio_fd, ch, 1);
++  EV_SET(ch, fd, EVFILT_READ, EV_ADD | EV_ENABLE | EV_CLEAR | EV_DISPATCH, 0, 0,
++         ((void *)fd2uuid(fd)));
++  EV_SET(ch + 1, fd, EVFILT_WRITE, EV_ADD | EV_ENABLE | EV_CLEAR | EV_DISPATCH,
++         0, 0, ((void *)fd2uuid(fd)));
++  fio_kq_apply(fio_kq[fd % fio_kq_n], ch, 2);
++}
+ 
++/* Before the pool starts: one kqueue per thread; connections registered so
++ * far move to their owner's kqueue (armed for both events). */
++static void fio_poll_threads_begin(void) {
++  if (evio_fd < 0 || fio_kq_n)
++    return;
++  const int n = fio_data->threads;
++  fio_kq = calloc(n, sizeof(*fio_kq));
++  fio_kq_box = calloc(n, sizeof(*fio_kq_box));
++  FIO_ASSERT_ALLOC(fio_kq && fio_kq_box);
++  fio_kq[0] = evio_fd;
++  for (int i = 1; i < n; ++i) {
++    fio_kq[i] = kqueue();
++    if (fio_kq[i] == -1) {
++      FIO_LOG_FATAL("couldn't open kqueue.\n");
++      exit(errno);
++    }
++  }
++  for (int i = 0; i < n; ++i) {
++    fio_kq_box[i].lock = FIO_LOCK_INIT;
++    struct kevent u;
++    EV_SET(&u, FIO_KQ_WAKE_IDENT, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, NULL);
++    fio_kq_apply(fio_kq[i], &u, 1);
++  }
++  fio_kq_n = n;
++  for (size_t fd = 0; fd <= fio_data->max_protocol_fd; ++fd)
++    if (fd % n && fd_data(fd).open && fd_data(fd).protocol)
++      fio_kq_migrate((intptr_t)fd);
++  fio_kq_next_thread = 0;
++  fio_kq_live = 1;
++}
++
++/* After the pool joined: inboxes are applied and pending closes made. */
++static void fio_poll_threads_end(void) {
++  if (!fio_kq_n)
++    return;
++  fio_kq_live = 0;
++  for (int i = 0; i < fio_kq_n; ++i) {
++    fio_kq_box_s *b = fio_kq_box + i;
++    for (int j = 0; j < b->n_cls; ++j)
++      close(b->cls[j]);
++    for (int j = 0; j < b->n_chg; ++j)
++      if (fio_kq_change_live(b->chg + j))
++        fio_kq_apply(fio_kq[i], b->chg + j, 1);
++    b->n_cls = b->n_chg = 0;
++  }
++}
++
++static void fio_poll_threads_teardown(void) {
++  if (!fio_kq_n)
++    return;
++  fio_poll_threads_end();
++  for (int i = 0; i < fio_kq_n; ++i) {
++    struct kevent u;
++    EV_SET(&u, FIO_KQ_WAKE_IDENT, EVFILT_USER, EV_DELETE, 0, 0, NULL);
++    fio_kq_apply(fio_kq[i], &u, 1);
++    if (i)
++      close(fio_kq[i]);
++    free(fio_kq_box[i].chg);
++    free(fio_kq_box[i].cls);
++  }
++  free(fio_kq);
++  free(fio_kq_box);
++  fio_kq = NULL;
++  fio_kq_box = NULL;
++  fio_kq_n = 0;
++}
++
+ static void fio_poll_init(void) {
+   fio_poll_close();
+   evio_fd = kqueue();
+@@ -1956,22 +2245,14 @@
+   struct kevent chevent[1];
+   EV_SET(chevent, fd, EVFILT_READ, EV_ADD | EV_ENABLE | EV_CLEAR | EV_DISPATCH,
+          0, 0, ((void *)fd2uuid(fd)));
+-  do {
+-    errno = 0;
+-    kevent(evio_fd, chevent, 1, NULL, 0, NULL);
+-  } while (errno == EINTR);
+-  return;
++  fio_kq_change(fd, chevent, 1);
+ }
+ 
+ static inline void fio_poll_add_write(intptr_t fd) {
+   struct kevent chevent[1];
+   EV_SET(chevent, fd, EVFILT_WRITE, EV_ADD | EV_ENABLE | EV_CLEAR | EV_DISPATCH,
+          0, 0, ((void *)fd2uuid(fd)));
+-  do {
+-    errno = 0;
+-    kevent(evio_fd, chevent, 1, NULL, 0, NULL);
+-  } while (errno == EINTR);
+-  return;
++  fio_kq_change(fd, chevent, 1);
+ }
+ 
+ static inline void fio_poll_add(intptr_t fd) {
+@@ -1980,23 +2261,16 @@
+          0, 0, ((void *)fd2uuid(fd)));
+   EV_SET(chevent + 1, fd, EVFILT_WRITE,
+          EV_ADD | EV_ENABLE | EV_CLEAR | EV_DISPATCH, 0, 0, ((void *)fd2uuid(fd)));
+-  do {
+-    errno = 0;
+-    kevent(evio_fd, chevent, 2, NULL, 0, NULL);
+-  } while (errno == EINTR);
+-  return;
++  fio_kq_change(fd, chevent, 2);
+ }
+ 
+ FIO_FUNC inline void fio_poll_remove_fd(intptr_t fd) {
+   if (evio_fd < 0)
+     return;
+   struct kevent chevent[2];
+-  EV_SET(chevent, fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
+-  EV_SET(chevent + 1, fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
+-  do {
+-    errno = 0;
+-    kevent(evio_fd, chevent, 2, NULL, 0, NULL);
+-  } while (errno == EINTR);
++  EV_SET(chevent, fd, EVFILT_READ, EV_DELETE, 0, 0, ((void *)fd2uuid(fd)));
++  EV_SET(chevent + 1, fd, EVFILT_WRITE, EV_DELETE, 0, 0, ((void *)fd2uuid(fd)));
++  fio_kq_change(fd, chevent, 2);
+ }
+ 
+ #ifndef NOTE_CRITICAL
+@@ -2054,7 +2328,7 @@
+ /* A pool thread that runs out of tasks while connections are waiting polls
+  * without blocking before it sleeps, instead of waiting for the cycle task. */
+ static int fio_poll_idle(void) {
+-  if (evio_fd < 0 || !fio_poll_backlog)
++  if (evio_fd < 0 || fio_kq_n || !fio_poll_backlog)
+     return 0;
+   struct kevent events[FIO_POLL_MAX_EVENTS];
+   const struct timespec zero = {.tv_sec = 0, .tv_nsec = 0};
+@@ -2076,7 +2350,7 @@
+     struct kevent arm;
+     EV_SET(&arm, (uintptr_t)-7, EVFILT_TIMER, EV_ADD | EV_ONESHOT,
+            NOTE_NSECONDS | NOTE_CRITICAL, first_ns, NULL);
+-    kevent(evio_fd, &arm, 1, NULL, 0, NULL);
++    kevent(fio_kq_mine(), &arm, 1, NULL, 0, NULL);
+   }
+ }
+ 
+@@ -2087,6 +2361,8 @@
+         fio_poll_timer_fired();
+       continue;
+     }
++    if (events[i].filter == EVFILT_USER)
++      continue;
+     const intptr_t uuid = (intptr_t)events[i].udata;
+     if (!uuid_is_valid(uuid) || !uuid_data(uuid).open)
+       continue;
+@@ -2102,6 +2378,106 @@
+   }
+ }
+ 
++/* One wait on this pool thread's kqueue: posted closes are made first and
++ * queued registrations go in with the wait, so no close() on an fd of this
++ * kqueue overlaps a wait on it. `sleep` lets task pushes wake the wait. */
++static int fio_kq_poll_self(struct timespec *timeout, int sleep, int idle,
++                            struct kevent *extra, int n_extra) {
++  const int me = fio_kq_self;
++  fio_kq_box_s *b = fio_kq_box + me;
++  struct kevent changes[FIO_KQ_LOCAL_CHANGES * 2 + 1];
++  struct kevent events[FIO_POLL_MAX_EVENTS];
++  int cls[FIO_KQ_LOCAL_CHANGES];
++  int n = fio_kq_take_local(changes), n_cls = 0, more;
++  fio_lock(&b->lock);
++  int j = 0;
++  for (; j < b->n_chg && n < FIO_KQ_LOCAL_CHANGES * 2; ++j)
++    n = fio_kq_keep(fio_kq[me], b->chg + j, changes, n);
++  if (j) {
++    memmove(b->chg, b->chg + j, (b->n_chg - j) * sizeof(*b->chg));
++    b->n_chg -= j;
++  }
++  for (j = 0; j < b->n_cls && n_cls < FIO_KQ_LOCAL_CHANGES; ++j)
++    cls[n_cls++] = b->cls[j];
++  if (j) {
++    memmove(b->cls, b->cls + j, (b->n_cls - j) * sizeof(*b->cls));
++    b->n_cls -= j;
++  }
++  more = b->n_chg || b->n_cls;
++  if (sleep && !more) {
++    b->sleeping = 1;
++    b->woken = 0;
++  }
++  fio_unlock(&b->lock);
++  for (j = 0; j < n_cls; ++j)
++    close(cls[j]);
++  for (j = 0; j < n_extra; ++j)
++    changes[n++] = extra[j];
++  static const struct timespec zero = {.tv_sec = 0, .tv_nsec = 0};
++  if (sleep && !more) {
++    __atomic_add_fetch(&fio_kq_sleepers, 1, __ATOMIC_SEQ_CST);
++    if (fio_defer_has_queue() || !fio_is_running())
++      timeout = (struct timespec *)&zero;
++  }
++  if (more)
++    timeout = (struct timespec *)&zero;
++  int count = kevent(fio_kq[me], changes, n, events, FIO_POLL_MAX_EVENTS,
++                     timeout);
++  if (sleep && !more) {
++    __atomic_sub_fetch(&fio_kq_sleepers, 1, __ATOMIC_SEQ_CST);
++    fio_lock(&b->lock);
++    b->sleeping = 0;
++    fio_unlock(&b->lock);
++  }
++  fio_kq_backlog = (count == FIO_POLL_MAX_EVENTS);
++  if (count > 0)
++    fio_poll_dispatch(events, count, idle);
++  return count;
++}
++
++static void fio_poll_own_peek(void) {
++  if (!fio_kq_live || fio_kq_self < 0)
++    return;
++  struct timespec zero = {.tv_sec = 0, .tv_nsec = 0};
++  fio_kq_poll_self(&zero, 0, 1, NULL, 0);
++}
++
++/* An idle pool thread waits on its own kqueue (returns 0 without a pool). */
++static int fio_poll_own_wait(void) {
++  if (!fio_kq_live || fio_kq_self < 0)
++    return 0;
++  struct timespec to = {.tv_sec = 0, .tv_nsec = 0};
++  if (!fio_kq_backlog)
++    to.tv_nsec = FIO_DEFER_IDLE_WAIT_MS * 1000000L;
++  fio_kq_poll_self(&to, 1, 1, NULL, 0);
++  return 1;
++}
++
++/* Without a pool (shutdown), every kqueue is polled from one thread. */
++static int fio_kq_poll_all(struct timespec *timeout) {
++  struct kevent events[FIO_POLL_MAX_EVENTS];
++  static const struct timespec zero = {.tv_sec = 0, .tv_nsec = 0};
++  int total = 0;
++  for (int i = 0; i < fio_kq_n; ++i) {
++    int c = kevent(fio_kq[i], NULL, 0, events, FIO_POLL_MAX_EVENTS, &zero);
++    if (c > 0) {
++      fio_poll_dispatch(events, c, 1);
++      total += c;
++    }
++  }
++  if (total)
++    return total;
++  struct timespec t = *timeout;
++  if (t.tv_sec || t.tv_nsec > 10000000L) {
++    t.tv_sec = 0;
++    t.tv_nsec = 10000000L;
++  }
++  int c = kevent(fio_kq[0], NULL, 0, events, FIO_POLL_MAX_EVENTS, &t);
++  if (c > 0)
++    fio_poll_dispatch(events, c, 1);
++  return c;
++}
++
+ static size_t fio_poll(void) {
+   if (evio_fd < 0)
+     return -1;
+@@ -2123,6 +2499,19 @@
+     n_arm = 1;
+     timeout.tv_sec = 1;
+     timeout.tv_nsec = 0;
++  }
++  if (fio_kq_n) {
++    int c;
++    if (fio_kq_live && fio_kq_self >= 0)
++      c = fio_kq_poll_self(&timeout, 1, 0, &arm, n_arm);
++    else {
++      if (n_arm)
++        kevent(fio_kq[0], &arm, 1, NULL, 0, NULL);
++      c = fio_kq_poll_all(&timeout);
++    }
++    if (c < 0)
++      return errno == EINTR ? 0 : -1;
++    return c;
+   }
+   /* wait for events and handle them, submitting the queued re-arms; one
+    * whose connection closed meanwhile is dropped */
+@@ -3652,7 +4041,7 @@
+   fio_unlock(&uuid_data(uuid).protocol_lock);
+   if (lost_race)
+     return;
+-  close(fio_uuid2fd(uuid));
++  fio_poll_close_fd(fio_uuid2fd(uuid));
+ #if FIO_ENGINE_POLL
+   fio_poll_remove_fd(fio_uuid2fd(uuid));
+ #endif
+@@ -4578,7 +4967,9 @@
+ 
+   /* A single thread doesn't need a pool. */
+   if (fio_data->threads > 1) {
++    fio_poll_threads_begin();
+     fio_defer_thread_pool_join(fio_defer_thread_pool_new(fio_data->threads));
++    fio_poll_threads_end();
+   } else {
+     fio_defer_perform();
+   }
+@@ -4737,6 +5128,7 @@
+   }
+   fio_worker_startup();
+   fio_worker_cleanup();
++  fio_poll_threads_teardown();
+ }
+ 
+ /* *****************************************************************************

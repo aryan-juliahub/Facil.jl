@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Julia ${{ matrix.julia }} - ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        julia: ['1.10', '1']
+        # macos-latest is arm64; macos-15-intel is the x86_64 image (macos-13 is retired).
+        os: [ubuntu-latest, macos-latest, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install zlib headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y zlib1g-dev
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia }}
+      - uses: julia-actions/cache@v2
+
+      # Julia >= 1.11 reads [sources] in Project.toml, so the repo project works as is.
+      - name: Build libfacil_julia
+        if: matrix.julia != '1.10'
+        run: |
+          julia --project=. -e 'using Pkg; Pkg.instantiate()'
+          julia --project=. deps/build.jl --verbose
+      - name: Test HttpTypes
+        if: matrix.julia != '1.10'
+        run: julia --project=lib/HttpTypes -e 'using Pkg; Pkg.test()'
+      - name: Test Facil
+        if: matrix.julia != '1.10'
+        run: julia -t 4 --project=. -e 'using Pkg; Pkg.test()'
+
+      # Julia 1.10 ignores [sources]: develop both packages into a scratch environment.
+      # Pkg.develop runs deps/build.jl through Pkg.build.
+      - name: Build and test (Julia 1.10, developed environment)
+        if: matrix.julia == '1.10'
+        run: |
+          julia --project=ci110 -e '
+            using Pkg
+            Pkg.develop([PackageSpec(path="lib/HttpTypes"), PackageSpec(path=".")])
+            Pkg.build("Facil"; verbose=true)
+            Pkg.test("HttpTypes")'
+          julia -t 4 --project=ci110 -e 'using Pkg; Pkg.test("Facil")'
+
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ matrix.os }}-julia-${{ matrix.julia }}
+          path: |
+            deps/build/**/*.log
+            ~/.julia/scratchspaces/**/build/**/*.log
+            ~/.julia/logs/
+          if-no-files-found: ignore
+
+  # The patch suites drive the merged facil.io objects directly; on Linux they are
+  # the only run of the epoll, sendfile and timerfd paths.
+  patches-linux:
+    name: facil.io patch suites - ubuntu-latest
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev lsof curl python3 openssl
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install node modules
+        run: |
+          mkdir -p "$RUNNER_TEMP/node" && cd "$RUNNER_TEMP/node"
+          npm init -y >/dev/null && npm install ws@8
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v2
+      - name: Fetch OpenSSL headers
+        run: |
+          julia --project=. -e 'using Pkg; Pkg.instantiate()'
+          julia --project=. deps/build.jl
+          h=$(find deps/build "$HOME/.julia/artifacts" -path '*/include/openssl/opensslv.h' 2>/dev/null | head -1)
+          echo "OPENSSL=$(dirname "$(dirname "$(dirname "$h")")")" >> "$GITHUB_ENV"
+      - name: Run suites (robust, upload, ws, tls, fdreuse)
+        run: |
+          export NODE_MODULES="$RUNNER_TEMP/node/node_modules"
+          test/patches/run.sh "$RUNNER_TEMP/patches" robust upload ws tls fdreuse
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: patch-suites-linux
+          path: ${{ runner.temp }}/patches
+          if-no-files-found: ignore

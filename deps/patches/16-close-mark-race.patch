@@ -1,0 +1,152 @@
+diff --git a/lib/facil/fio.c b/lib/facil/fio.c
+--- a/lib/facil/fio.c
++++ b/lib/facil/fio.c
+@@ -372,13 +372,13 @@
+                 (void *)fd2uuid(fd), (is_open ? "open" : "closed"));
+   return 0;
+ }
++
++static int fio_mark_close(intptr_t uuid, uint8_t value, uint8_t wait);
+ 
+ static inline void fio_force_close_in_poll(intptr_t uuid) {
+   /* an event may outlive its connection: the descriptor is then someone else's */
+-  if (!uuid_data(uuid).open)
+-    return;
+-  uuid_data(uuid).close = 2;
+-  fio_force_close(uuid);
++  if (fio_mark_close(uuid, 2, 1) == 1)
++    fio_force_close(uuid);
+ }
+ 
+ /* *****************************************************************************
+@@ -2319,6 +2319,23 @@
+   fio_unlock(&uuid_data(uuid).sock_lock);
+ }
+ 
++/* Re-arms reading after `on_data` unless the connection was suspended. The
++ * `scheduled` flag is taken under the socket lock with the uuid re-checked,
++ * so a task of a closed connection never takes the flag of the fd's next one. */
++static void fio_poll_rearm_unless_suspended(intptr_t uuid) {
++  if (!uuid_is_valid(uuid))
++    return;
++  fio_lock(&uuid_data(uuid).sock_lock);
++  if (uuid_is_valid(uuid) && uuid_data(uuid).open &&
++      !fio_trylock(&uuid_data(uuid).scheduled))
++#if FIO_ENGINE_KQUEUE
++    fio_poll_rearm_read(fio_uuid2fd(uuid));
++#else
++    fio_poll_add_read(fio_uuid2fd(uuid));
++#endif
++  fio_unlock(&uuid_data(uuid).sock_lock);
++}
++
+ static void deferred_on_ready(void *arg, void *arg2) {
+   errno = 0;
+   if (fio_flush((intptr_t)arg) > 0 || errno == EWOULDBLOCK || errno == EAGAIN) {
+@@ -2348,12 +2365,14 @@
+     }
+     goto postpone;
+   }
+-  fio_unlock(&uuid_data(uuid).scheduled);
++  /* checked under the socket lock: the fd may already serve a new connection */
++  fio_lock(&uuid_data(uuid).sock_lock);
++  if (uuid_is_valid(uuid))
++    fio_unlock(&uuid_data(uuid).scheduled);
++  fio_unlock(&uuid_data(uuid).sock_lock);
+   pr->on_data((intptr_t)uuid, pr);
+   protocol_unlock(pr, FIO_PR_LOCK_TASK);
+-  if (!fio_trylock(&uuid_data(uuid).scheduled)) {
+-    fio_poll_rearm((intptr_t)uuid, 0);
+-  }
++  fio_poll_rearm_unless_suspended((intptr_t)uuid);
+   return;
+ 
+ postpone:
+@@ -3386,14 +3405,49 @@
+  *
+  * `fio_flash` will be automatically scheduled.
+  */
++/* Sets the close marker of a still open `uuid` (`value` 2 also overrides a
++ * 1). The uuid is re-checked under the socket lock, so a marker never lands
++ * on the next connection to reuse the fd. Returns 1 when set, 0 for a stale
++ * uuid and -1 when the lock is busy and `wait` is 0. */
++static int fio_mark_close(intptr_t uuid, uint8_t value, uint8_t wait) {
++  if (!uuid_is_valid(uuid))
++    return 0;
++  if (wait) {
++    fio_lock(&uuid_data(uuid).sock_lock);
++  } else {
++    size_t i = 0;
++    while (fio_trylock(&uuid_data(uuid).sock_lock))
++      if (++i >= 1024)
++        return -1;
++  }
++  const int ok = uuid_is_valid(uuid) && uuid_data(uuid).open;
++  if (ok && (value == 2 || !uuid_data(uuid).close))
++    uuid_data(uuid).close = value;
++  fio_unlock(&uuid_data(uuid).sock_lock);
++  return ok;
++}
++
++/* The caller may hold the socket lock (a flush in progress), so the marker
++ * is retried from a task rather than waited for. */
++static void deferred_close_mark(void *uuid, void *ignr) {
++  switch (fio_mark_close((intptr_t)uuid, 1, 0)) {
++  case -1:
++    fio_defer_push_urgent(deferred_close_mark, uuid, NULL);
++    break;
++  case 1:
++    fio_force_event((intptr_t)uuid, FIO_EVENT_ON_READY);
++    break;
++  }
++  (void)ignr;
++}
++
+ void fio_close(intptr_t uuid) {
+   if (!uuid_is_valid(uuid)) {
+     errno = EBADF;
+     return;
+   }
+   if (uuid_data(uuid).packet || uuid_data(uuid).sock_lock) {
+-    uuid_data(uuid).close = 1;
+-    fio_force_event(uuid, FIO_EVENT_ON_READY);
++    deferred_close_mark((void *)uuid, NULL);
+     return;
+   }
+   fio_force_close(uuid);
+@@ -3410,9 +3464,6 @@
+     return;
+   }
+   // FIO_LOG_DEBUG("fio_force_close called for uuid %p", (void *)uuid);
+-  /* make sure the close marker is set */
+-  if (!uuid_data(uuid).close)
+-    uuid_data(uuid).close = 1;
+   /* clear away any packets in case we want to cut the connection short. */
+   fio_packet_s *packet = NULL;
+   fio_lock(&uuid_data(uuid).sock_lock);
+@@ -3421,6 +3472,9 @@
+     errno = EBADF;
+     return;
+   }
++  /* make sure the close marker is set */
++  if (!uuid_data(uuid).close)
++    uuid_data(uuid).close = 1;
+   packet = uuid_data(uuid).packet;
+   uuid_data(uuid).packet = NULL;
+   uuid_data(uuid).packet_last = &uuid_data(uuid).packet;
+@@ -3619,7 +3673,6 @@
+   case EIO:    /* fallthrough */
+   case EINVAL: /* fallthrough */
+   case EBADF:
+-    uuid_data(uuid).close = 1;
+     fio_force_close(uuid);
+     return -1;
+   }
+@@ -3639,7 +3692,6 @@
+                   (int)fio_peer_addr(uuid).len, fio_peer_addr(uuid).data);
+   fio_unlock(&uuid_data(uuid).sock_lock);
+   fio_flush_after_unlock(uuid, done, NULL, NULL);
+-  uuid_data(uuid).close = 1;
+   fio_force_close(uuid);
+   return -1;
+ }

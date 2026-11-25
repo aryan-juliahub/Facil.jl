@@ -1,0 +1,12 @@
+import crypto from 'node:crypto';
+const port = process.argv[2];
+const open = () => new Promise((res, rej) => { const ws = new WebSocket(`ws://127.0.0.1:${port}/`); ws.binaryType = 'arraybuffer'; ws.onopen = () => res(ws); ws.onerror = () => rej(new Error('ws error')); });
+const next = (ws, ms = 5000) => new Promise((res, rej) => { const t = setTimeout(() => rej(new Error('timeout')), ms); ws.addEventListener('message', e => { clearTimeout(t); res(e.data); }, { once: true }); });
+const a = await open(), b = await open();
+a.send('pure text'); let r = await next(a); console.log(r === 'pure text' ? 'PASS' : 'FAIL', 'pure text echo', JSON.stringify(r));
+const bin = crypto.randomBytes(100000); a.send(bin); r = await next(a); console.log(Buffer.from(r).equals(bin) ? 'PASS' : 'FAIL', 'pure binary echo 100000 bytes');
+const both = Promise.all([next(a), next(b)]);
+const body = await (await fetch(`http://127.0.0.1:${port}/x`)).text();
+console.log(body === 'pure hijack\n' ? 'PASS' : 'FAIL', 'pure http_hijack + fio_write2_fn', JSON.stringify(body));
+const [x, y] = await both; console.log(x === y && x === 'published by pure ccall' ? 'PASS' : 'FAIL', 'pure fio_publish to 2 subscribers', JSON.stringify(x));
+a.close(); b.close(); await new Promise(r => setTimeout(r, 500)); process.exit(0);

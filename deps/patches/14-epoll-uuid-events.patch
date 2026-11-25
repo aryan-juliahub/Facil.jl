@@ -1,0 +1,54 @@
+diff --git a/lib/facil/fio.c b/lib/facil/fio.c
+--- a/lib/facil/fio.c
++++ b/lib/facil/fio.c
+@@ -1723,6 +1723,8 @@
+   return;
+ }
+ 
++/* Events carry the uuid they were armed for, so one that outlives its
++ * connection is recognized as stale instead of acting on the fd's next user. */
+ static inline int fio_poll_add2(int fd, uint32_t events, int ep_fd) {
+   struct epoll_event chevent;
+   int ret;
+@@ -1730,14 +1732,14 @@
+     errno = 0;
+     chevent = (struct epoll_event){
+         .events = events,
+-        .data.fd = fd,
++        .data.u64 = (uint64_t)fd2uuid(fd),
+     };
+     ret = epoll_ctl(ep_fd, EPOLL_CTL_MOD, fd, &chevent);
+     if (ret == -1 && errno == ENOENT) {
+       errno = 0;
+       chevent = (struct epoll_event){
+           .events = events,
+-          .data.fd = fd,
++          .data.u64 = (uint64_t)fd2uuid(fd),
+       };
+       ret = epoll_ctl(ep_fd, EPOLL_CTL_ADD, fd, &chevent);
+     }
+@@ -1787,18 +1789,19 @@
+         epoll_wait(internal[j].data.fd, events, FIO_POLL_MAX_EVENTS, 0);
+     if (active_count > 0) {
+       for (int i = 0; i < active_count; i++) {
++        const intptr_t uuid = (intptr_t)events[i].data.u64;
++        if (!uuid_is_valid(uuid) || !uuid_data(uuid).open)
++          continue;
+         if (events[i].events & (~(EPOLLIN | EPOLLOUT))) {
+           // errors are hendled as disconnections (on_close)
+-          fio_force_close_in_poll(fd2uuid(events[i].data.fd));
++          fio_force_close_in_poll(uuid);
+         } else {
+           // no error, then it's an active event(s)
+           if (events[i].events & EPOLLOUT) {
+-            fio_defer_push_urgent(deferred_on_ready,
+-                                  (void *)fd2uuid(events[i].data.fd), NULL);
++            fio_defer_push_urgent(deferred_on_ready, (void *)uuid, NULL);
+           }
+           if (events[i].events & EPOLLIN)
+-            fio_defer_push_task(deferred_on_data,
+-                                (void *)fd2uuid(events[i].data.fd), NULL);
++            fio_defer_push_task(deferred_on_data, (void *)uuid, NULL);
+         }
+       } // end for loop
+       total += active_count;

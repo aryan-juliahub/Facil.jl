@@ -1,0 +1,133 @@
+diff --git a/lib/facil/http/websockets.c b/lib/facil/http/websockets.c
+index 3b62f7c..1667d60 100644
+--- a/lib/facil/http/websockets.c
++++ b/lib/facil/http/websockets.c
+@@ -100,6 +100,10 @@ struct ws_s {
+   uint8_t deflate;
+   /** a fragmented message is being collected (and is compressed if 2). */
+   uint8_t in_msg;
++  /** reading is paused by `websocket_read_pause`. */
++  uint8_t read_paused;
++  /** text messages are not checked for UTF-8 on this connection. */
++  uint8_t no_utf8;
+ };
+ 
+ static int ws_buffer_reserve(ws_s *ws, size_t size) {
+@@ -283,21 +287,31 @@ static inline void clear_subscriptions(ws_s *ws) {
+ Callbacks - Required functions for websocket_parser.h
+ ***************************************************************************** */
+ 
+-/* Sends a Close frame once; `code` 0 sends one without a status. */
+-static void ws_send_close(ws_s *ws, uint16_t code) {
++/* Sends a Close frame once; `code` 0 sends one without a status. The reason
++ * is cut to the 123 bytes a control frame can carry. */
++static void ws_send_close_reason(ws_s *ws, uint16_t code, const char *reason,
++                                 size_t rlen) {
+   if (ws->closing)
+     return;
+   ws->closing = 1;
+-  uint8_t payload[2] = {(uint8_t)(code >> 8), (uint8_t)(code & 0xFF)};
+-  uint8_t *buff = fio_malloc(16);
++  if (!code || rlen > 123)
++    rlen = code ? 123 : 0;
++  uint8_t payload[125] = {(uint8_t)(code >> 8), (uint8_t)(code & 0xFF)};
++  if (rlen)
++    memcpy(payload + 2, reason, rlen);
++  uint8_t *buff = fio_malloc(144);
+   FIO_ASSERT_ALLOC(buff);
++  const uint64_t plen = code ? 2 + rlen : 0;
+   const uint64_t len =
+       ws->is_client
+-          ? websocket_client_wrap(buff, payload, code ? 2 : 0, 8, 1, 1, 0)
+-          : websocket_server_wrap(buff, payload, code ? 2 : 0, 8, 1, 1, 0);
++          ? websocket_client_wrap(buff, payload, plen, 8, 1, 1, 0)
++          : websocket_server_wrap(buff, payload, plen, 8, 1, 1, 0);
+   fio_write2(ws->fd, .data.buffer = buff, .length = len,
+              .after.dealloc = fio_free);
+ }
++static void ws_send_close(ws_s *ws, uint16_t code) {
++  ws_send_close_reason(ws, code, NULL, 0);
++}
+ 
+ /* Fails the connection: the peer gets a Close frame with `code`, and input is
+  * dropped until it hangs up or a short timeout closes the socket. */
+@@ -318,7 +332,7 @@ static void ws_deliver(ws_s *ws, fio_str_info_s msg, uint8_t is_text,
+       return;
+     }
+   }
+-  if (is_text && ws_validate_utf8 &&
++  if (is_text && ws_validate_utf8 && !ws->no_utf8 &&
+       !ws_utf8_valid((uint8_t *)msg.data, msg.len)) {
+     ws_fail(ws, 1007);
+     return;
+@@ -341,6 +355,10 @@ static void websocket_on_unwrapped(void *ws_p, void *msg, uint64_t len,
+     return;
+   }
+   if (last && first) {
++    if (len > ws->max_msg_size) {
++      ws_fail(ws, 1009);
++      return;
++    }
+     ws_deliver(ws, (fio_str_info_s){.data = msg, .len = len}, (uint8_t)text,
+                compressed);
+     return;
+@@ -460,6 +478,10 @@ static void on_data(intptr_t sockfd, fio_protocol_s *ws_) {
+   ws_s *const ws = (ws_s *)ws_;
+   if (ws == NULL)
+     return;
++  if (ws->read_paused && ws->closing != 2) {
++    fio_suspend(sockfd);
++    return;
++  }
+   if (!ws_read_buffer && !(ws_read_buffer = malloc(WS_READ_BUFFER))) {
+     fio_force_close(sockfd);
+     return;
+@@ -1083,8 +1105,26 @@ void websocket_close(ws_s *ws) { websocket_close2(ws, 1000); }
+ /** Starts the closing handshake with `code`: the socket closes when the peer
+  * answers, or after a short timeout when it does not. */
+ void websocket_close2(ws_s *ws, uint16_t code) {
++  websocket_close3(ws, code, NULL, 0);
++}
++void websocket_close3(ws_s *ws, uint16_t code, const char *reason,
++                      size_t len) {
+   if (ws->closing)
+     return;
+-  ws_send_close(ws, code);
++  ws_send_close_reason(ws, code, reason, len);
+   fio_timeout_set(ws->fd, 3);
+ }
++
++void websocket_max_msg_size_set(ws_s *ws, size_t size) {
++  ws->max_msg_size = size;
++}
++
++void websocket_utf8_check_set(ws_s *ws, int enable) { ws->no_utf8 = !enable; }
++
++void websocket_read_pause(ws_s *ws, int pause) {
++  if (ws->read_paused == !!pause)
++    return;
++  ws->read_paused = !!pause;
++  if (!pause)
++    fio_force_event(ws->fd, FIO_EVENT_ON_DATA);
++}
+diff --git a/lib/facil/http/websockets.h b/lib/facil/http/websockets.h
+index 969a991..03f1366 100644
+--- a/lib/facil/http/websockets.h
++++ b/lib/facil/http/websockets.h
+@@ -25,6 +25,16 @@ void websocket_attach2(intptr_t uuid, http_settings_s *http_settings,
+ 
+ /** Closes with a status code (`websocket_close` sends 1000). */
+ void websocket_close2(ws_s *ws, uint16_t code);
++/** As `websocket_close2`, with a reason (UTF-8, at most 123 bytes are sent). */
++void websocket_close3(ws_s *ws, uint16_t code, const char *reason, size_t len);
++/** Sets the largest message this connection accepts (call from `on_open`). */
++void websocket_max_msg_size_set(ws_s *ws, size_t size);
++/** Turns the UTF-8 check off (0) for this connection's text messages. */
++void websocket_utf8_check_set(ws_s *ws, int enable);
++/** Stops (1) or restarts (0) reading from the peer. Frames already read are
++ * still delivered. Call with the connection's task lock held, as in its
++ * callbacks. */
++void websocket_read_pause(ws_s *ws, int pause);
+ 
+ /** Text messages that are not valid UTF-8 close the connection with 1007. */
+ void websocket_validate_utf8_set(int enable);
