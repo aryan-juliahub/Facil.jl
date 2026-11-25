@@ -16,3 +16,4 @@
 16-close-mark-race.patch
 17-reactor-thread-wake.patch
 18-kqueue-per-thread.patch
+19-slow-reader-would-block.patch

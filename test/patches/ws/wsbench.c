@@ -1,4 +1,4 @@
-// WebSocket load client (kqueue, plain TCP). Prints one JSON line.
+// WebSocket load client (kqueue or epoll, plain TCP). Prints one JSON line.
 //   wsbench echo <port> <path> <conns> <threads> <size> <text|bin> <warm_s> <dur_s>
 //   wsbench sub  <port> <path> <conns> <threads> <expect_per_conn> <timeout_s> <readyfile> [stalled]
 //     `stalled` connections (spread evenly) subscribe and then never read.
@@ -19,11 +19,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/event.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "../rdpoll.h"
 
 #define FINE 10000 /* 1 us buckets below 10 ms, 100 us buckets up to 100 s */
 #define NB (FINE + 999901)
@@ -176,13 +177,12 @@ static void parse(thr_t *t, conn_t *c, uint64_t now, int measuring) {
 
 static void *run(void *arg) {
   thr_t *t = arg;
-  struct kevent ev[256];
+  rdpoll_ev ev[256];
   int measuring = mode != ECHO;
   if (mode == ECHO)
     for (int i = 0; i < t->n; i++) send_msg(t, &t->c[i]);
   for (;;) {
-    struct timespec ts = {0, 50 * 1000000};
-    int n = kevent(t->kq, NULL, 0, ev, 256, &ts);
+    int n = rdpoll_wait(t->kq, ev, 256, 50);
     uint64_t now = now_ns();
     if (mode == ECHO) {
       if (!measuring && now >= t_warm_end) { measuring = 1; t->msgs = 0; t->bytes = 0; t->wire = 0; t->first_ns = now; }
@@ -192,7 +192,7 @@ static void *run(void *arg) {
     }
     if (atomic_load(&stop_flag)) break;
     for (int i = 0; i < n; i++) {
-      conn_t *c = ev[i].udata;
+      conn_t *c = RDPOLL_UDATA(ev[i]);
       if (c->dead) continue;
       if (!c->buf) { c->cap = 4096; c->buf = malloc(c->cap); }
       ssize_t r = read(c->fd, c->buf + c->len, c->cap - c->len);
@@ -290,7 +290,7 @@ int main(int argc, char **argv) {
   thr_t *T = calloc(nthr, sizeof(thr_t));
   conn_t *C = calloc(nconn, sizeof(conn_t));
   int connect_errors = 0;
-  for (int i = 0; i < nthr; i++) { T[i].kq = kqueue(); T[i].hist = calloc(NB, 8); T[i].c = C + (size_t)i * nconn / nthr; T[i].n = (int)((size_t)(i + 1) * nconn / nthr - (size_t)i * nconn / nthr); }
+  for (int i = 0; i < nthr; i++) { T[i].kq = rdpoll_new(); T[i].hist = calloc(NB, 8); T[i].c = C + (size_t)i * nconn / nthr; T[i].n = (int)((size_t)(i + 1) * nconn / nthr - (size_t)i * nconn / nthr); }
   for (int i = 0; i < nthr; i++)
     for (int j = 0; j < T[i].n; j++) {
       conn_t *c = &T[i].c[j];
@@ -298,8 +298,7 @@ int main(int argc, char **argv) {
       const long gi = c - C;
       if (n_stalled && gi * n_stalled / nconn != (gi + 1) * n_stalled / nconn) continue;
       T[i].active++;
-      struct kevent e; EV_SET(&e, c->fd, EVFILT_READ, EV_ADD, 0, 0, c);
-      kevent(T[i].kq, &e, 1, NULL, 0, NULL);
+      rdpoll_add(T[i].kq, c->fd, c);
     }
   uint64_t t0 = now_ns();
   t_warm_end = t0 + (uint64_t)(warm * 1e9);

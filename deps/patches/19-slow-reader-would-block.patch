@@ -1,0 +1,31 @@
+diff --git a/lib/facil/fio.c b/lib/facil/fio.c
+index 2d1c247..28a5339 100644
+--- a/lib/facil/fio.c
++++ b/lib/facil/fio.c
+@@ -4104,6 +4104,7 @@ ssize_t fio_flush(intptr_t uuid) {
+ 
+   const fio_packet_s *old_packet = uuid_data(uuid).packet;
+   uint8_t partial = 0;
++  uint8_t stalled = 0;
+ 
+   if (fio_gather_writes && uuid_data(uuid).rw_hooks == &FIO_DEFAULT_RW_HOOKS &&
+       old_packet->write_func == fio_sock_write_buffer) {
+@@ -4117,6 +4118,9 @@ ssize_t fio_flush(intptr_t uuid) {
+     /* a lagging reader of many small packets is left to the protocol */
+     partial = w > 0 && (size_t)w < offered &&
+               uuid_data(uuid).pending_bytes >= FIO_GATHER_BYTES;
++    /* a full socket that takes nothing counts as one that takes part */
++    stalled = w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) &&
++              uuid_data(uuid).pending_bytes >= FIO_GATHER_BYTES;
+     tmp = w > 0 ? 1 : (int)w;
+   } else {
+     const size_t before = fio_packet_remaining(old_packet);
+@@ -4139,6 +4143,8 @@ ssize_t fio_flush(intptr_t uuid) {
+     drain_udata = uuid_data(uuid).drain_udata;
+     uuid_data(uuid).drain_cb = NULL;
+   }
++  if (stalled && uuid_data(uuid).packet_count >= FIO_SLOWLORIS_LIMIT)
++    goto attacked;
+   if (tmp <= 0) {
+     goto test_errno;
+   }

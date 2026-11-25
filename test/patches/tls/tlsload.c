@@ -24,10 +24,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/event.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
+
+#include "../rdpoll.h"
 
 static int port;
 static const char *path = "/json";
@@ -144,29 +145,24 @@ typedef struct {
 
 static void *ka_thread(void *arg) {
   ka_thread_s *t = arg;
-  int kq = kqueue();
+  int kq = rdpoll_new();
   static __thread unsigned char buf[1 << 18];
   for (int i = 0; i < t->count; ++i) {
-    struct kevent ev;
-    EV_SET(&ev, t->conns[i].fd, EVFILT_READ, EV_ADD, 0, 0, &t->conns[i]);
-    kevent(kq, &ev, 1, NULL, 0, NULL);
+    rdpoll_add(kq, t->conns[i].fd, &t->conns[i]);
     if (SSL_write(t->conns[i].ssl, request, request_len) != request_len)
       atomic_fetch_add(&n_err, 1);
   }
-  struct kevent evs[64];
-  struct timespec to = {0, 100000000};
+  rdpoll_ev evs[64];
   while (!stopping) {
-    int n = kevent(kq, NULL, 0, evs, 64, &to);
+    int n = rdpoll_wait(kq, evs, 64, 100);
     for (int e = 0; e < n; ++e) {
-      conn_s *c = evs[e].udata;
+      conn_s *c = RDPOLL_UDATA(evs[e]);
       for (;;) {
         ssize_t r = read(c->fd, buf, sizeof(buf));
         if (r <= 0) {
           if (r == 0 || (errno != EAGAIN && errno != EINTR)) {
             atomic_fetch_add(&n_err, 1);
-            struct kevent ev;
-            EV_SET(&ev, c->fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
-            kevent(kq, &ev, 1, NULL, 0, NULL);
+            rdpoll_del(kq, c->fd);
           }
           break;
         }
