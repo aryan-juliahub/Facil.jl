@@ -60,7 +60,11 @@ static uint64_t t_warm_end, t_end, expect_per;
 static atomic_int stop_flag;
 static int n_stalled, deflate_mode;
 
-static inline uint64_t now_ns(void) { return clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW); }
+static inline uint64_t now_ns(void) {
+  struct timespec t;
+  clock_gettime(CLOCK_MONOTONIC, &t);
+  return (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec;
+}
 
 static void hist_add(thr_t *t, uint64_t ns) {
   uint64_t us = ns / 1000;

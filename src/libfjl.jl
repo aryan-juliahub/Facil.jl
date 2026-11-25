@@ -58,10 +58,22 @@ macro gcsafe_ccall(expr)
     if VERSION >= v"1.12.0-"
         return esc(:(@ccall gc_safe = true $expr))
     end
+    # Arguments are evaluated and converted before the thread turns GC-safe:
+    # Julia code running in that state races a collection.
+    (Meta.isexpr(expr, :(::)) && Meta.isexpr(expr.args[1], :call)) || error("@gcsafe_ccall: expected f(args...)::T")
+    call, rettype = expr.args
+    pre = Expr[]
+    args = map(call.args[2:end]) do a
+        Meta.isexpr(a, :(::)) || error("@gcsafe_ccall: every argument needs a type")
+        c = gensym("arg")
+        push!(pre, :(local $c = Base.cconvert($(a.args[2]), $(a.args[1]))))
+        :($c::$(a.args[2]))
+    end
     quote
+        $(pre...)
         local ptls = ccall(:jl_get_ptls_states, Ptr{Cvoid}, ())
         local state = ccall(:jl_gc_safe_enter, Int8, (Ptr{Cvoid},), ptls)
-        local r = @ccall $expr
+        local r = @ccall $(Expr(:(::), Expr(:call, call.args[1], args...), rettype))
         ccall(:jl_gc_safe_leave, Cvoid, (Ptr{Cvoid}, Int8), ptls, state)
         r
     end |> esc
