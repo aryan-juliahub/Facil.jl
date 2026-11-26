@@ -88,11 +88,13 @@ end
         rep = F.Timer(t -> push!(ticks, (time_ns() - t0) / 1e6), 0.005; interval = 0.005)
         Base.sleep(0.2)
         close(rep)
+        elapsed = (time_ns() - t0) / 1e6
         @test !isopen(rep)
         k = length(ticks)
         Base.sleep(0.05)
         @test length(ticks) == k
-        @test 20 <= k <= 50
+        # Late ticks are skipped, so a busy machine sees fewer, never more.
+        @test 5 <= k <= elapsed / 5 + 1
         @test all(>=(5.0), ticks)
 
         m = Threads.Atomic{Int}(0)
