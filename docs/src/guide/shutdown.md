@@ -8,7 +8,12 @@ event streams and streamed responses when a server closes.
 
 - A server started with [`serve`](@ref) stops on SIGTERM (`kill <pid>`), after
   giving requests in progress `shutdown_grace` seconds (default 10). This is
-  what process managers send, and the way to stop a deployed server.
+  what process managers send.
+- **The SIGTERM drain only saves handlers that are computing or waiting in
+  `Facil.sleep`.** A handler that is waiting on a socket, a file, a child
+  process or `Base.sleep` when the signal arrives never finishes. If your
+  handlers do I/O, drain with `close(server; grace)` before the process is
+  signalled: see [Draining handlers that do I/O](@ref shutdown-drain-io).
 - A server started with [`serve!`](@ref) stops when you call `close(server)` or
   `close(server; grace = seconds)`.
 - Ctrl-C stops `serve` cleanly in the REPL. In a script it ends the process
@@ -104,6 +109,50 @@ Details worth knowing:
 - Code after `serve(...)` does **not** run on SIGTERM: the process exits from
   inside `serve`. Put cleanup in an `atexit` hook if you need it.
 - SIGKILL cannot be handled; requests in progress are lost.
+
+!!! warning "Handlers that wait on I/O do not survive the SIGTERM drain"
+    Once Julia has received SIGTERM it runs its exit hooks and its event loop
+    stops turning. Facil's drain runs inside such a hook. A handler that is
+    computing, or waiting in [`Facil.sleep`](@ref), still finishes and its
+    response is sent. A handler waiting on anything Julia's event loop
+    delivers does not: a socket (a database or HTTP client), a child process,
+    `Base.sleep`, a `Timer`. It never wakes up, its client gets no response,
+    and the process waits out the whole `shutdown_grace` before exiting.
+
+    Measured on Julia 1.13 with a one-second handler and `shutdown_grace = 5`:
+    with `Facil.sleep(1)` or a one-second computation the client got its
+    response and the process exited after 0.8 s; with `Base.sleep(1)`, a
+    socket read or a child process (`run`) the client got nothing and the process
+    exited after 5 s. On Julia 1.10 the drain was less reliable still: in our
+    runs even a computing handler was sometimes cut off.
+
+## [Draining handlers that do I/O](@id shutdown-drain-io)
+
+`close(server; grace)` called from ordinary code, while the process is still
+running normally, drains every kind of handler. So give your service a way to
+be told to drain, and have whatever stops the process use it first. An
+authenticated endpoint is the simplest:
+
+```@eval
+Main.example("shutdown_drain.jl")
+```
+
+```sh
+$ curl http://127.0.0.1:8080/ &
+$ curl -X POST -H 'X-Drain-Token: change-me' http://127.0.0.1:8080/admin/drain
+draining
+finished
+```
+
+The handler here waits in `Base.sleep`, which the SIGTERM drain would not
+survive. After the drain request the server stops accepting, the request in
+flight gets its `finished`, `wait` returns, and the program ends with exit
+status 0. Under systemd, call the endpoint from `ExecStop=`; in Kubernetes,
+from a `preStop` hook ([Deployment](deployment.md)). SIGTERM then arrives at a
+process that is already idle or gone.
+
+Facil cannot tell you who is calling (there is no client address), so protect
+the endpoint with a secret, and do not expose it through your reverse proxy.
 
 ## Ctrl-C
 

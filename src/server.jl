@@ -345,7 +345,8 @@ HTTPS:
 
 Operation:
 - `shutdown_grace::Real = 10`: seconds [`serve`](@ref) gives requests in
-  progress when the process gets SIGTERM.
+  progress when the process gets SIGTERM. See [`serve`](@ref) for which
+  handlers can use them.
 - `verbose::Bool = false`: write one line to stderr at start-up (address,
   threads, limits), one for each request that `before_body` rejects or that
   is over `body_in_memory`, and one when the server starts to drain.
@@ -526,6 +527,12 @@ has more to do (tests, several servers, a REPL session).
   stops accepting, requests in progress get up to `shutdown_grace` seconds
   (default 10), and the process exits with status 143. Julia prints its own
   `signal 15: Terminated` report to stderr first; that is not an error.
+  Only handlers that are computing or waiting in [`Facil.sleep`](@ref) can
+  finish during this drain. Julia's event loop has stopped by then, so a
+  handler waiting on a socket, a file, a process or `Base.sleep` never
+  returns and its client is cut off when the grace period ends. To drain
+  those, call `close(server; grace)` yourself before the process is stopped;
+  see the [shutdown guide](@ref shutdown-guide).
 - In a script (`julia server.jl`), Ctrl-C ends the process the way Julia ends
   any script on SIGINT: Julia prints its `signal 2: Interrupt` report, then
   the same drain runs and the process exits.

@@ -66,11 +66,21 @@ not reach the task waiting inside `serve`. Send SIGTERM instead, or run the
 program from a file. [Shutdown and signals](../guide/shutdown.md) has the
 details.
 
+### Requests are cut off at shutdown although I set `shutdown_grace`
+
+The SIGTERM drain can only finish handlers that are computing or waiting in
+`Facil.sleep`. A handler that was waiting on a database, another service or
+`Base.sleep` when the signal arrived never completes, because Julia's event
+loop stops once the process starts to exit. Drain with
+`close(server; grace)` before the signal is sent, for example through a drain
+endpoint: [Draining handlers that do I/O](@ref shutdown-drain-io).
+
 ### The process takes seconds to exit after SIGTERM
 
 It is waiting for requests in flight, for up to `shutdown_grace` seconds
-(10 by default). A handler that never returns holds the process for the whole
-grace period. Lower `shutdown_grace`, or find the handler.
+(10 by default). A handler that never returns, or one that was waiting on I/O
+when the signal arrived (see above), holds the process for the whole grace
+period. Lower `shutdown_grace`, or find the handler.
 
 ## Slowness
 

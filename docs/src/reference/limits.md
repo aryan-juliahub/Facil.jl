@@ -81,6 +81,13 @@ The keyword limits are per server; see [Configuration](configuration.md).
 - **Garbage collection pauses request handling.** A collection stops every
   thread, the reactor included. See
   [Performance tuning](../guide/performance.md) for sizes and remedies.
+- **The SIGTERM drain does not finish handlers that are waiting on I/O.**
+  After the signal Julia's event loop no longer runs, so only handlers that
+  are computing or in `Facil.sleep` complete; a handler waiting on a socket,
+  a process or `Base.sleep` is lost after the grace period. Call
+  `close(server; grace)` before stopping the process. On Julia 1.10 the
+  SIGTERM drain is unreliable for all handlers. See
+  [Shutdown and signals](@ref shutdown-drain-io).
 - **Ctrl-C stops `serve` cleanly only at the REPL.** In a script Julia prints
   its interrupt report first; under `julia -e`, or with
   `Base.exit_on_sigint(false)`, Ctrl-C does not stop the server at all. Use
