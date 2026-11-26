@@ -287,6 +287,13 @@ function scenario_sigint(port, mode, flag)
     F.ensure_reactor()
     listen_fixture(port)
     println("DISP SIGINT ", before, " ", F.fjl_sig_disposition(2), " SIGPIPE ", F.fjl_sig_disposition(13))
+    # The exit case parks without a timer: a signal that makes Julia exit runs
+    # the exit hooks on top of whatever thread 1 was doing, and inside `sleep`
+    # that can hold a timer's lock the hooks then wait for.
+    if mode == "exit"
+        println("READY"); flush(stdout)
+        wait(Base.Event())
+    end
     caught = reported = 0
     ready = false
     while true

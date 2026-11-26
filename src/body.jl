@@ -911,8 +911,8 @@ end
 
 function on_body_abort(udata::Ptr{Cvoid}, mode::Int32)
     try
-        st = get_pending(UInt(udata); remove = true)
         Threads.atomic_add!(BODY_ABORTS, 1)
+        st = get_pending(UInt(udata); remove = true)
         st === nothing && return nothing
         st.stream === nothing || finish!(st.stream; aborted = true)
         st.file === nothing || close(st.file)

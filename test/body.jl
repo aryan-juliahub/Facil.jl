@@ -261,15 +261,19 @@ curlok(p) = readchomp(`curl -s -X POST --data-binary abc http://127.0.0.1:$p/buf
 
     @testset "uploads cut off mid-body" begin
         a0 = F.BODY_ABORTS[]
+        cut = 0
         for mode in ("/buffer", "/stream", "/callback", "/spool"), chunked in (false, true)
             s = Sockets.connect("127.0.0.1", p)
             write(s, head_of(mode, 5 << 20; chunked, extra = "x-id: cut$mode\r\n"))
             chunked && write(s, "100000\r\n")
             write(s, view(BLOCK, 1:300_000))
-            sleep(0.1)
+            # A connection closed before the server first reads it is dropped unread.
+            started = timedwait(() -> F.pending_bodies() == 1, 5; pollint = 0.005) == :ok
             close(s)
+            cut += started && timedwait(() -> F.pending_bodies() == 0, 5; pollint = 0.005) == :ok
         end
-        @test timedwait(() -> F.pending_bodies() == 0, 5) == :ok
+        @test cut == 8
+        @test F.pending_bodies() == 0
         @test F.BODY_ABORTS[] - a0 == 8
         lock(() -> empty!(CALLBACKS), CB_LOCK)
         @test post(p, "/buffer", 100_000) == (200, expected(100_000))
