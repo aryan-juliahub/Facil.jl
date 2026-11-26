@@ -1,0 +1,206 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="830" height="736" viewBox="0 0 830 736" role="img" aria-labelledby="t d" font-family="system-ui, -apple-system, Segoe UI, Helvetica, Arial, sans-serif">
+<title id="t">Facil.jl vs Node.js throughput</title><desc id="d">Dumbbell chart: requests or messages per second for Facil.jl and the fastest Node.js option, per scoreboard row, log scale, with the Facil/Node ratio.</desc>
+<rect width="830" height="736" rx="8" fill="#0d1117"/>
+<text x="16" y="30" font-size="17" font-weight="600" fill="#efefef">Throughput, Facil.jl vs the fastest Node.js option per row</text>
+<text x="16" y="51" font-size="12.5" fill="#9c9c9c">Requests (or WebSocket messages) per second, log scale, median of 3 runs. Apple M5 Pro, macOS, 25 Nov 2026.</text>
+<circle cx="22" cy="72" r="5" fill="#338ced"/><text x="32" y="76" font-size="12.5" fill="#efefef">Facil.jl</text><circle cx="100" cy="72" r="5" fill="none" stroke="#e76624" stroke-width="2.5"/><text x="110" y="76" font-size="12.5" fill="#efefef">Node.js</text><text x="176" y="76" font-size="12.5" fill="#9c9c9c">‡ approved exception (Facil behind, accepted)</text>
+<text x="814" y="76" font-size="12" text-anchor="end" fill="#9c9c9c">Facil ÷ Node</text>
+<line x1="326.3" y1="86" x2="326.3" y2="690" stroke="#262b33" stroke-width="1"/>
+<text x="326.3" y="708" font-size="11.5" text-anchor="middle" fill="#9c9c9c" style="font-variant-numeric: tabular-nums">3k</text>
+<line x1="404.5" y1="86" x2="404.5" y2="690" stroke="#262b33" stroke-width="1"/>
+<text x="404.5" y="708" font-size="11.5" text-anchor="middle" fill="#9c9c9c" style="font-variant-numeric: tabular-nums">10k</text>
+<line x1="475.9" y1="86" x2="475.9" y2="690" stroke="#262b33" stroke-width="1"/>
+<text x="475.9" y="708" font-size="11.5" text-anchor="middle" fill="#9c9c9c" style="font-variant-numeric: tabular-nums">30k</text>
+<line x1="554.1" y1="86" x2="554.1" y2="690" stroke="#262b33" stroke-width="1"/>
+<text x="554.1" y="708" font-size="11.5" text-anchor="middle" fill="#9c9c9c" style="font-variant-numeric: tabular-nums">100k</text>
+<line x1="625.5" y1="86" x2="625.5" y2="690" stroke="#262b33" stroke-width="1"/>
+<text x="625.5" y="708" font-size="11.5" text-anchor="middle" fill="#9c9c9c" style="font-variant-numeric: tabular-nums">300k</text>
+<line x1="703.7" y1="86" x2="703.7" y2="690" stroke="#262b33" stroke-width="1"/>
+<text x="703.7" y="708" font-size="11.5" text-anchor="middle" fill="#9c9c9c" style="font-variant-numeric: tabular-nums">1M</text>
+<line x1="300" y1="690" x2="730" y2="690" stroke="#474747" stroke-width="1"/>
+<g><title>A1 Tiny reply, 1 core: Facil 232,517, node:http 170,961 (1.36×, PASS)</title>
+<rect x="0" y="92.0" width="830" height="26" fill="transparent"/>
+<text x="286" y="109.5" font-size="13" text-anchor="end" fill="#efefef">Tiny reply, 1 core</text>
+<line x1="608.9" y1="105.0" x2="588.9" y2="105.0" stroke="#5a5f66" stroke-width="2" stroke-linecap="round"/>
+<circle cx="608.9" cy="105.0" r="5" fill="#338ced" stroke="#0d1117" stroke-width="2"/>
+<circle cx="588.9" cy="105.0" r="5.5" fill="none" stroke="#e76624" stroke-width="2.5"/>
+<text x="814" y="109.5" font-size="13" text-anchor="end" fill="#efefef" style="font-variant-numeric: tabular-nums">1.36×</text>
+</g>
+<g><title>A2 150-byte JSON, 1 core: Facil 237,781, node:http 161,129 (1.48×, PASS)</title>
+<rect x="0" y="118.0" width="830" height="26" fill="transparent"/>
+<text x="286" y="135.5" font-size="13" text-anchor="end" fill="#efefef">150-byte JSON, 1 core</text>
+<line x1="610.4" y1="131.0" x2="585.1" y2="131.0" stroke="#5a5f66" stroke-width="2" stroke-linecap="round"/>
+<circle cx="610.4" cy="131.0" r="5" fill="#338ced" stroke="#0d1117" stroke-width="2"/>
+<circle cx="585.1" cy="131.0" r="5.5" fill="none" stroke="#e76624" stroke-width="2.5"/>
+<text x="814" y="135.5" font-size="13" text-anchor="end" fill="#efefef" style="font-variant-numeric: tabular-nums">1.48×</text>
+</g>
+<g><title>A3 POST echo: Facil 218,288, node:http 139,026 (1.57×, PASS)</title>
+<rect x="0" y="144.0" width="830" height="26" fill="transparent"/>
+<text x="286" y="161.5" font-size="13" text-anchor="end" fill="#efefef">POST echo</text>
+<line x1="604.8" y1="157.0" x2="575.5" y2="157.0" stroke="#5a5f66" stroke-width="2" stroke-linecap="round"/>
+<circle cx="604.8" cy="157.0" r="5" fill="#338ced" stroke="#0d1117" stroke-width="2"/>
+<circle cx="575.5" cy="157.0" r="5.5" fill="none" stroke="#e76624" stroke-width="2.5"/>
+<text x="814" y="161.5" font-size="13" text-anchor="end" fill="#efefef" style="font-variant-numeric: tabular-nums">1.57×</text>
+</g>
+<g><title>A4 100 KB response: Facil 111,611, node:http 87,291 (1.28×, PASS)</title>
+<rect x="0" y="170.0" width="830" height="26" fill="transparent"/>
+<text x="286" y="187.5" font-size="13" text-anchor="end" fill="#efefef">100 KB response</text>
+<line x1="561.2" y1="183.0" x2="545.3" y2="183.0" stroke="#5a5f66" stroke-width="2" stroke-linecap="round"/>
+<circle cx="561.2" cy="183.0" r="5" fill="#338ced" stroke="#0d1117" stroke-width="2"/>
+<circle cx="545.3" cy="183.0" r="5.5" fill="none" stroke="#e76624" stroke-width="2.5"/>
+<text x="814" y="187.5" font-size="13" text-anchor="end" fill="#efefef" style="font-variant-numeric: tabular-nums">1.28×</text>
+</g>
+<g><title>A19b 12 request headers: Facil 181,567, node:http 121,380 (1.50×, PASS)</title>
+<rect x="0" y="196.0" width="830" height="26" fill="transparent"/>
+<text x="286" y="213.5" font-size="13" text-anchor="end" fill="#efefef">12 request headers</text>
+<line x1="592.8" y1="209.0" x2="566.7" y2="209.0" stroke="#5a5f66" stroke-width="2" stroke-linecap="round"/>
+<circle cx="592.8" cy="209.0" r="5" fill="#338ced" stroke="#0d1117" stroke-width="2"/>
+<circle cx="566.7" cy="209.0" r="5.5" fill="none" stroke="#e76624" stroke-width="2.5"/>
+<text x="814" y="213.5" font-size="13" text-anchor="end" fill="#efefef" style="font-variant-numeric: tabular-nums">1.50×</text>
+</g>
+<g><title>A20c Pipelining depth 16: Facil 373,962, node:http 245,715 (1.52×, PASS)</title>
+<rect x="0" y="222.0" width="830" height="26" fill="transparent"/>
+<text x="286" y="239.5" font-size="13" text-anchor="end" fill="#efefef">Pipelining, depth 16</text>
+<line x1="639.8" y1="235.0" x2="612.5" y2="235.0" stroke="#5a5f66" stroke-width="2" stroke-linecap="round"/>
+<circle cx="639.8" cy="235.0" r="5" fill="#338ced" stroke="#0d1117" stroke-width="2"/>
+<circle cx="612.5" cy="235.0" r="5.5" fill="none" stroke="#e76624" stroke-width="2.5"/>
+<text x="814" y="239.5" font-size="13" text-anchor="end" fill="#efefef" style="font-variant-numeric: tabular-nums">1.52×</text>
+</g>
+<g><title>A16 Keep-alive, 1,000 connections: Facil 222,037, node:http 141,560 (1.57×, PASS)</title>
+<rect x="0" y="248.0" width="830" height="26" fill="transparent"/>
+<text x="286" y="265.5" font-size="13" text-anchor="end" fill="#efefef">Keep-alive, 1,000 connections</text>
+<line x1="605.9" y1="261.0" x2="576.7" y2="261.0" stroke="#5a5f66" stroke-width="2" stroke-linecap="round"/>
+<circle cx="605.9" cy="261.0" r="5" fill="#338ced" stroke="#0d1117" stroke-width="2"/>
+<circle cx="576.7" cy="261.0" r="5.5" fill="none" stroke="#e76624" stroke-width="2.5"/>
+<text x="814" y="265.5" font-size="13" text-anchor="end" fill="#efefef" style="font-variant-numeric: tabular-nums">1.57×</text>
+</g>
+<g><title>A17 Keep-alive, 10,000 connections: Facil 234,442, node:http 111,387 (2.10×, PASS)</title>
+<rect x="0" y="274.0" width="830" height="26" fill="transparent"/>
+<text x="286" y="291.5" font-size="13" text-anchor="end" fill="#efefef">Keep-alive, 10,000 connections</text>
+<line x1="609.4" y1="287.0" x2="561.1" y2="287.0" stroke="#5a5f66" stroke-width="2" stroke-linecap="round"/>
+<circle cx="609.4" cy="287.0" r="5" fill="#338ced" stroke="#0d1117" stroke-width="2"/>
+<circle cx="561.1" cy="287.0" r="5.5" fill="none" stroke="#e76624" stroke-width="2.5"/>
+<text x="814" y="291.5" font-size="13" text-anchor="end" fill="#efefef" style="font-variant-numeric: tabular-nums">2.10×</text>
+</g>
+<g><title>2 Tiny reply (JSON), 4 cores: Facil 185,948, cluster W=4 179,037 (1.04×, PASS)</title>
+<rect x="0" y="300.0" width="830" height="26" fill="transparent"/>
+<text x="286" y="317.5" font-size="13" text-anchor="end" fill="#efefef">Tiny JSON, 4 cores (Node cluster)</text>
+<line x1="594.4" y1="313.0" x2="591.9" y2="313.0" stroke="#5a5f66" stroke-width="2" stroke-linecap="round"/>
+<circle cx="594.4" cy="313.0" r="5" fill="#338ced" stroke="#0d1117" stroke-width="2"/>
+<circle cx="591.9" cy="313.0" r="5.5" fill="none" stroke="#e76624" stroke-width="2.5"/>
+<text x="814" y="317.5" font-size="13" text-anchor="end" fill="#efefef" style="font-variant-numeric: tabular-nums">1.04×</text>
+</g>
+<g><title>3 Tiny reply (JSON), 8 cores: Facil 170,497, cluster W=8 167,826 (1.02×, PASS)</title>
+<rect x="0" y="326.0" width="830" height="26" fill="transparent"/>
+<text x="286" y="343.5" font-size="13" text-anchor="end" fill="#efefef">Tiny JSON, 8 cores (Node cluster)</text>
+<line x1="588.8" y1="339.0" x2="587.7" y2="339.0" stroke="#5a5f66" stroke-width="2" stroke-linecap="round"/>
+<circle cx="588.8" cy="339.0" r="5" fill="#338ced" stroke="#0d1117" stroke-width="2"/>
+<circle cx="587.7" cy="339.0" r="5.5" fill="none" stroke="#e76624" stroke-width="2.5"/>
+<text x="814" y="343.5" font-size="13" text-anchor="end" fill="#efefef" style="font-variant-numeric: tabular-nums">1.02×</text>
+</g>
+<g><title>1 CPU-bound handler, 8 cores: Facil 125,898, cluster W=8 121,492 (1.04×, PASS)</title>
+<rect x="0" y="352.0" width="830" height="26" fill="transparent"/>
+<text x="286" y="369.5" font-size="13" text-anchor="end" fill="#efefef">CPU-bound, 8 cores (Node cluster)</text>
+<line x1="569.1" y1="365.0" x2="566.7" y2="365.0" stroke="#5a5f66" stroke-width="2" stroke-linecap="round"/>
+<circle cx="569.1" cy="365.0" r="5" fill="#338ced" stroke="#0d1117" stroke-width="2"/>
+<circle cx="566.7" cy="365.0" r="5.5" fill="none" stroke="#e76624" stroke-width="2.5"/>
+<text x="814" y="369.5" font-size="13" text-anchor="end" fill="#efefef" style="font-variant-numeric: tabular-nums">1.04×</text>
+</g>
+<g><title>4 Async (task) handler, tiny reply, 1 reactor + 2 Julia threads: Facil 209,424, node:http 147,050 (1.42×, PASS)</title>
+<rect x="0" y="378.0" width="830" height="26" fill="transparent"/>
+<text x="286" y="395.5" font-size="13" text-anchor="end" fill="#efefef">Task handler, 2 threads</text>
+<line x1="602.1" y1="391.0" x2="579.1" y2="391.0" stroke="#5a5f66" stroke-width="2" stroke-linecap="round"/>
+<circle cx="602.1" cy="391.0" r="5" fill="#338ced" stroke="#0d1117" stroke-width="2"/>
+<circle cx="579.1" cy="391.0" r="5.5" fill="none" stroke="#e76624" stroke-width="2.5"/>
+<text x="814" y="395.5" font-size="13" text-anchor="end" fill="#efefef" style="font-variant-numeric: tabular-nums">1.42×</text>
+</g>
+<g><title>17a Handler waits 1 ms (Facil.sleep), 100 connections: Facil 90,131, node:http 60,409 (1.49×, PASS)</title>
+<rect x="0" y="404.0" width="830" height="26" fill="transparent"/>
+<text x="286" y="421.5" font-size="13" text-anchor="end" fill="#efefef">Handler sleeps 1 ms, 100 connections</text>
+<line x1="547.4" y1="417.0" x2="521.4" y2="417.0" stroke="#5a5f66" stroke-width="2" stroke-linecap="round"/>
+<circle cx="547.4" cy="417.0" r="5" fill="#338ced" stroke="#0d1117" stroke-width="2"/>
+<circle cx="521.4" cy="417.0" r="5.5" fill="none" stroke="#e76624" stroke-width="2.5"/>
+<text x="814" y="421.5" font-size="13" text-anchor="end" fill="#efefef" style="font-variant-numeric: tabular-nums">1.49×</text>
+</g>
+<g><title>A27 HTTPS JSON, keep-alive: Facil 156,251, node:https 130,859 (1.19×, PASS)</title>
+<rect x="0" y="430.0" width="830" height="26" fill="transparent"/>
+<text x="286" y="447.5" font-size="13" text-anchor="end" fill="#efefef">HTTPS JSON, keep-alive</text>
+<line x1="583.1" y1="443.0" x2="571.6" y2="443.0" stroke="#5a5f66" stroke-width="2" stroke-linecap="round"/>
+<circle cx="583.1" cy="443.0" r="5" fill="#338ced" stroke="#0d1117" stroke-width="2"/>
+<circle cx="571.6" cy="443.0" r="5.5" fill="none" stroke="#e76624" stroke-width="2.5"/>
+<text x="814" y="447.5" font-size="13" text-anchor="end" fill="#efefef" style="font-variant-numeric: tabular-nums">1.19×</text>
+</g>
+<g><title>A13a TLS handshakes, ECDSA full, 10 clients: Facil 7,299, node:https 6,857 (1.06×, PASS)</title>
+<rect x="0" y="456.0" width="830" height="26" fill="transparent"/>
+<text x="286" y="473.5" font-size="13" text-anchor="end" fill="#efefef">TLS handshakes, ECDSA</text>
+<line x1="384.1" y1="469.0" x2="380.0" y2="469.0" stroke="#5a5f66" stroke-width="2" stroke-linecap="round"/>
+<circle cx="384.1" cy="469.0" r="5" fill="#338ced" stroke="#0d1117" stroke-width="2"/>
+<circle cx="380.0" cy="469.0" r="5.5" fill="none" stroke="#e76624" stroke-width="2.5"/>
+<text x="814" y="473.5" font-size="13" text-anchor="end" fill="#efefef" style="font-variant-numeric: tabular-nums">1.06×</text>
+</g>
+<g><title>A12b Upload 64 KB, in memory: Facil 112,278, node:http 72,584 (1.55×, PASS)</title>
+<rect x="0" y="482.0" width="830" height="26" fill="transparent"/>
+<text x="286" y="499.5" font-size="13" text-anchor="end" fill="#efefef">Upload 64 KB</text>
+<line x1="561.6" y1="495.0" x2="533.3" y2="495.0" stroke="#5a5f66" stroke-width="2" stroke-linecap="round"/>
+<circle cx="561.6" cy="495.0" r="5" fill="#338ced" stroke="#0d1117" stroke-width="2"/>
+<circle cx="533.3" cy="495.0" r="5.5" fill="none" stroke="#e76624" stroke-width="2.5"/>
+<text x="814" y="499.5" font-size="13" text-anchor="end" fill="#efefef" style="font-variant-numeric: tabular-nums">1.55×</text>
+</g>
+<g><title>A11 gzip responses (100 KB JSON, level 6, off the event loop): Facil 12,169, node:http 7,662 (1.59×, PASS)</title>
+<rect x="0" y="508.0" width="830" height="26" fill="transparent"/>
+<text x="286" y="525.5" font-size="13" text-anchor="end" fill="#efefef">gzip, 100 KB JSON</text>
+<line x1="417.3" y1="521.0" x2="387.2" y2="521.0" stroke="#5a5f66" stroke-width="2" stroke-linecap="round"/>
+<circle cx="417.3" cy="521.0" r="5" fill="#338ced" stroke="#0d1117" stroke-width="2"/>
+<circle cx="387.2" cy="521.0" r="5.5" fill="none" stroke="#e76624" stroke-width="2.5"/>
+<text x="814" y="525.5" font-size="13" text-anchor="end" fill="#efefef" style="font-variant-numeric: tabular-nums">1.59×</text>
+</g>
+<g><title>27 Streamed gzip of 100 KB JSON: Facil 10,523, node:http 6,297 (1.67×, PASS)</title>
+<rect x="0" y="534.0" width="830" height="26" fill="transparent"/>
+<text x="286" y="551.5" font-size="13" text-anchor="end" fill="#efefef">Streamed gzip, 100 KB JSON</text>
+<line x1="407.9" y1="547.0" x2="374.5" y2="547.0" stroke="#5a5f66" stroke-width="2" stroke-linecap="round"/>
+<circle cx="407.9" cy="547.0" r="5" fill="#338ced" stroke="#0d1117" stroke-width="2"/>
+<circle cx="374.5" cy="547.0" r="5.5" fill="none" stroke="#e76624" stroke-width="2.5"/>
+<text x="814" y="551.5" font-size="13" text-anchor="end" fill="#efefef" style="font-variant-numeric: tabular-nums">1.67×</text>
+</g>
+<g><title>19a Build a 1 KB JSON response: Facil 69,271, node:http 131,376 (0.53×, EXCEPTION)</title>
+<rect x="0" y="560.0" width="830" height="26" fill="transparent"/>
+<text x="286" y="577.5" font-size="13" text-anchor="end" fill="#efefef">Build a 1 KB JSON response</text>
+<line x1="530.3" y1="573.0" x2="571.8" y2="573.0" stroke="#5a5f66" stroke-width="2" stroke-linecap="round"/>
+<circle cx="530.3" cy="573.0" r="5" fill="#338ced" stroke="#0d1117" stroke-width="2"/>
+<circle cx="571.8" cy="573.0" r="5.5" fill="none" stroke="#e76624" stroke-width="2.5"/>
+<text x="814" y="577.5" font-size="13" text-anchor="end" font-weight="600" fill="#efefef" style="font-variant-numeric: tabular-nums">0.53× ‡</text>
+</g>
+<g><title>A29 WebSocket echo 64 B, 100 connections: Facil 282,130, uWebSockets.js 279,283 (1.01×, PASS)</title>
+<rect x="0" y="586.0" width="830" height="26" fill="transparent"/>
+<text x="286" y="603.5" font-size="13" text-anchor="end" fill="#efefef">WebSocket echo 64 B (uWS)</text>
+<line x1="621.5" y1="599.0" x2="620.8" y2="599.0" stroke="#5a5f66" stroke-width="2" stroke-linecap="round"/>
+<circle cx="621.5" cy="599.0" r="5" fill="#338ced" stroke="#0d1117" stroke-width="2"/>
+<circle cx="620.8" cy="599.0" r="5.5" fill="none" stroke="#e76624" stroke-width="2.5"/>
+<text x="814" y="603.5" font-size="13" text-anchor="end" fill="#efefef" style="font-variant-numeric: tabular-nums">1.01×</text>
+</g>
+<g><title>7-c10 WebSocket echo 256 KB, 10 connections: Facil 31,275, uWebSockets.js 33,762 (0.93×, EXCEPTION)</title>
+<rect x="0" y="612.0" width="830" height="26" fill="transparent"/>
+<text x="286" y="629.5" font-size="13" text-anchor="end" fill="#efefef">WebSocket echo 256 KB, 10 conns (uWS)</text>
+<line x1="478.6" y1="625.0" x2="483.6" y2="625.0" stroke="#5a5f66" stroke-width="2" stroke-linecap="round"/>
+<circle cx="478.6" cy="625.0" r="5" fill="#338ced" stroke="#0d1117" stroke-width="2"/>
+<circle cx="483.6" cy="625.0" r="5.5" fill="none" stroke="#e76624" stroke-width="2.5"/>
+<text x="814" y="629.5" font-size="13" text-anchor="end" font-weight="600" fill="#efefef" style="font-variant-numeric: tabular-nums">0.93× ‡</text>
+</g>
+<g><title>7-c100 WebSocket echo 256 KB, 100 connections: Facil 25,508, uWebSockets.js 25,247 (1.01×, PASS)</title>
+<rect x="0" y="638.0" width="830" height="26" fill="transparent"/>
+<text x="286" y="655.5" font-size="13" text-anchor="end" fill="#efefef">WebSocket echo 256 KB, 100 conns (uWS)</text>
+<line x1="465.4" y1="651.0" x2="464.7" y2="651.0" stroke="#5a5f66" stroke-width="2" stroke-linecap="round"/>
+<circle cx="465.4" cy="651.0" r="5" fill="#338ced" stroke="#0d1117" stroke-width="2"/>
+<circle cx="464.7" cy="651.0" r="5.5" fill="none" stroke="#e76624" stroke-width="2.5"/>
+<text x="814" y="655.5" font-size="13" text-anchor="end" fill="#efefef" style="font-variant-numeric: tabular-nums">1.01×</text>
+</g>
+<g><title>A14 WebSocket broadcast, 1,000 subscribers x 1,000 Hz: Facil 968,013, uWebSockets.js 999,971 (0.97×, FAIL)</title>
+<rect x="0" y="664.0" width="830" height="26" fill="transparent"/>
+<text x="286" y="681.5" font-size="13" text-anchor="end" fill="#efefef">WS broadcast, 1k subs x 1 kHz (uWS)</text>
+<line x1="701.6" y1="677.0" x2="703.7" y2="677.0" stroke="#5a5f66" stroke-width="2" stroke-linecap="round"/>
+<circle cx="701.6" cy="677.0" r="5" fill="#338ced" stroke="#0d1117" stroke-width="2"/>
+<circle cx="703.7" cy="677.0" r="5.5" fill="none" stroke="#e76624" stroke-width="2.5"/>
+<text x="814" y="681.5" font-size="13" text-anchor="end" font-weight="600" fill="#efefef" style="font-variant-numeric: tabular-nums">0.97×</text>
+</g>
+<text x="730" y="726" font-size="11.5" text-anchor="end" fill="#9c9c9c">WebSocket rows (uWS) are against uWebSockets.js; all others against node:http / https / cluster.</text>
+</svg>
