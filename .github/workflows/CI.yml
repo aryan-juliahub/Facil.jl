@@ -70,11 +70,6 @@ jobs:
           println("own stream:"); dec(out)
           EOF
           julia --project=. "$RUNNER_TEMP/diag.jl"
-          for v in 1.0.9 1.1.0 1.1.1 1.2.0; do
-            echo "== brotli_jll $v"
-            julia --project="$RUNNER_TEMP/b$v" -e 'using Pkg; Pkg.add(name="brotli_jll", version=ARGS[1]; io=devnull)' $v &&
-              julia --project="$RUNNER_TEMP/b$v" "$RUNNER_TEMP/diag.jl" || true
-          done
 
       # Julia >= 1.11 reads [sources] in Project.toml, so the repo project works as is.
       - name: Build libfacil_julia

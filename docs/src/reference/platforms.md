@@ -53,8 +53,8 @@ developed and tested there.
 
 Every push runs, on GitHub Actions:
 
-- the Facil and HttpTypes test suites on Ubuntu, macOS arm64 and macOS Intel,
-  each with Julia 1.10 and the current release;
+- the Facil and HttpTypes test suites on Ubuntu (x86_64 and aarch64), macOS
+  arm64 and macOS Intel, each with Julia 1.10 and the current release;
 - the HttpTypes suite on Windows, plus a check that Facil refuses to load
   there with the WSL2 message;
 - facil.io's patch test suites on Linux, which exercise the epoll and
@@ -63,6 +63,13 @@ Every push runs, on GitHub Actions:
   its responses.
 
 The [benchmarks](benchmarks.md) were measured on macOS only.
+
+On aarch64 Linux the brotli *decoder* that Julia's `brotli_jll` package ships
+rejects valid input (its encoder is fine, and Facil's responses are
+byte-identical to those on other platforms). Facil only decodes brotli in
+`Facil.unbrotli`, a helper for tests and clients; it detects the fault and
+uses the system's `libbrotlidec` (package `libbrotli1` on Debian and Ubuntu)
+instead.
 
 ## The C library
 

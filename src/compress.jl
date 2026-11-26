@@ -222,10 +222,35 @@ function unzstd(data::AbstractVector{UInt8})
     out
 end
 
-"Decompresses brotli data."
-function unbrotli(data::AbstractVector{UInt8})
-    src = Vector{UInt8}(data)
-    s = @ccall libbrotlidec.BrotliDecoderCreateInstance(C_NULL::Ptr{Cvoid}, C_NULL::Ptr{Cvoid}, C_NULL::Ptr{Cvoid})::Ptr{Cvoid}
+# brotli_jll's decoder rejects valid streams on some platforms (seen on
+# aarch64 Linux), so the decoder is checked once and the system's is used
+# when it fails that check.
+const BROTLI_SAMPLE = (hex2bytes("1b03010004d4c3ebed7d97b211ca2c068ce6d8042a5f9f15"), "hello brotli "^20)
+const BROTLI_DECODER = Ref{Ptr{Cvoid}}(C_NULL)
+const BROTLI_DECODER_LOCK = ReentrantLock()
+
+function brotli_decoder()
+    BROTLI_DECODER[] == C_NULL || return BROTLI_DECODER[]
+    lock(BROTLI_DECODER_LOCK) do
+        BROTLI_DECODER[] == C_NULL || return BROTLI_DECODER[]
+        for name in (libbrotlidec, "libbrotlidec.so.1", "libbrotlidec")
+            h = Libdl.dlopen(name; throw_error = false)
+            h === nothing && continue
+            ok = try
+                String(brotli_decode(h, BROTLI_SAMPLE[1])) == BROTLI_SAMPLE[2]
+            catch
+                false
+            end
+            ok && return BROTLI_DECODER[] = h
+        end
+        error("unbrotli: the brotli decoder of brotli_jll rejects valid input on this platform and the system has no working libbrotlidec; Facil's brotli compression is not affected")
+    end
+end
+
+function brotli_decode(lib::Ptr{Cvoid}, src::Vector{UInt8})
+    create, run, destroy = Libdl.dlsym(lib, :BrotliDecoderCreateInstance), Libdl.dlsym(lib, :BrotliDecoderDecompressStream),
+                           Libdl.dlsym(lib, :BrotliDecoderDestroyInstance)
+    s = ccall(create, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}), C_NULL, C_NULL, C_NULL)
     out = UInt8[]
     buf = Vector{UInt8}(undef, 1 << 16)
     try
@@ -233,8 +258,8 @@ function unbrotli(data::AbstractVector{UInt8})
             avail_in, next_in = Ref{Csize_t}(length(src)), Ref{Ptr{UInt8}}(pointer(src))
             while true
                 avail_out, next_out = Ref{Csize_t}(length(buf)), Ref{Ptr{UInt8}}(pointer(buf))
-                r = @ccall libbrotlidec.BrotliDecoderDecompressStream(s::Ptr{Cvoid}, avail_in::Ptr{Csize_t}, next_in::Ptr{Ptr{UInt8}},
-                        avail_out::Ptr{Csize_t}, next_out::Ptr{Ptr{UInt8}}, C_NULL::Ptr{Csize_t})::Cint
+                r = ccall(run, Cint, (Ptr{Cvoid}, Ptr{Csize_t}, Ptr{Ptr{UInt8}}, Ptr{Csize_t}, Ptr{Ptr{UInt8}}, Ptr{Csize_t}),
+                          s, avail_in, next_in, avail_out, next_out, C_NULL)
                 append!(out, view(buf, 1:length(buf)-Int(avail_out[])))
                 r == 1 && break
                 r == 3 && continue
@@ -242,10 +267,13 @@ function unbrotli(data::AbstractVector{UInt8})
             end
         end
     finally
-        @ccall libbrotlidec.BrotliDecoderDestroyInstance(s::Ptr{Cvoid})::Cvoid
+        ccall(destroy, Cvoid, (Ptr{Cvoid},), s)
     end
     out
 end
+
+"Decompresses brotli data."
+unbrotli(data::AbstractVector{UInt8}) = brotli_decode(brotli_decoder(), Vector{UInt8}(data))
 
 # ---- streaming encoders ----
 

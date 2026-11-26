@@ -80,6 +80,11 @@ First version. Nothing has been released or registered yet.
   - The error log limit is per error type and call site (innermost four
     frames), no longer per type alone.
   - `Facil.Timer` has a `show` method.
+- aarch64 Linux is tested in CI. There the brotli decoder of `brotli_jll`
+  (every version from 1.0.9 to 1.2.1) rejects valid streams, while its
+  encoder's output is byte-identical to other platforms; `Facil.unbrotli`
+  now checks the decoder once and uses the system's `libbrotlidec` when the
+  check fails. Compression is not affected.
 - Installing: `Pkg.add` by URL works. The facil.io git submodule is gone (Pkg
   cannot check out a repository that has one); the pinned sources are
   downloaded and verified instead (`deps/fetch_facil.sh` for the patch
