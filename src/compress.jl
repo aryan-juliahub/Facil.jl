@@ -30,27 +30,27 @@ const ZSTD_POOL = Ptr{Cvoid}[]
 const CODEC_LOCK = Threads.SpinLock()
 
 function ld_take(level::Int)
-    lock(CODEC_LOCK)
+    lock_sigatomic(CODEC_LOCK)
     v = get!(Vector{Ptr{Cvoid}}, LD_POOL, level)
     c = isempty(v) ? C_NULL : pop!(v)
-    unlock(CODEC_LOCK)
+    unlock_sigatomic(CODEC_LOCK)
     c != C_NULL && return c
     c = @ccall libdeflate.libdeflate_alloc_compressor(level::Cint)::Ptr{Cvoid}
     c == C_NULL && throw(ArgumentError("libdeflate: invalid level $level"))
     c
 end
-ld_give(level::Int, c::Ptr{Cvoid}) = (lock(CODEC_LOCK); push!(LD_POOL[level], c); unlock(CODEC_LOCK); nothing)
+ld_give(level::Int, c::Ptr{Cvoid}) = (lock_sigatomic(CODEC_LOCK); push!(LD_POOL[level], c); unlock_sigatomic(CODEC_LOCK); nothing)
 
 function zstd_take()
-    lock(CODEC_LOCK)
+    lock_sigatomic(CODEC_LOCK)
     c = isempty(ZSTD_POOL) ? C_NULL : pop!(ZSTD_POOL)
-    unlock(CODEC_LOCK)
+    unlock_sigatomic(CODEC_LOCK)
     c != C_NULL && return c
     c = @ccall libzstd.ZSTD_createCCtx()::Ptr{Cvoid}
     c == C_NULL && throw(OutOfMemoryError())
     c
 end
-zstd_give(c::Ptr{Cvoid}) = (lock(CODEC_LOCK); push!(ZSTD_POOL, c); unlock(CODEC_LOCK); nothing)
+zstd_give(c::Ptr{Cvoid}) = (lock_sigatomic(CODEC_LOCK); push!(ZSTD_POOL, c); unlock_sigatomic(CODEC_LOCK); nothing)
 zstd_failed(n::Csize_t) = (@ccall libzstd.ZSTD_isError(n::Csize_t)::Cuint) != 0
 zstd_error(n::Csize_t) = error("zstd: ", unsafe_string(@ccall libzstd.ZSTD_getErrorName(n::Csize_t)::Cstring))
 
@@ -304,10 +304,10 @@ const Z_NO_FLUSH, Z_SYNC_FLUSH, Z_FINISH = Cint(0), Cint(2), Cint(4)
 const ZNG_POOL = Dict{Int,Vector{ZNGStream}}()
 
 function zng_take(level::Int)
-    lock(CODEC_LOCK)
+    lock_sigatomic(CODEC_LOCK)
     v = get!(Vector{ZNGStream}, ZNG_POOL, level)
     z = isempty(v) ? nothing : pop!(v)
-    unlock(CODEC_LOCK)
+    unlock_sigatomic(CODEC_LOCK)
     if z === nothing
         z = ZNGStream()
         r = @ccall libzng.zng_deflateInit2(z::Ref{ZNGStream}, Cint(level)::Cint, 8::Cint, 31::Cint, 8::Cint, 0::Cint)::Cint
@@ -317,7 +317,7 @@ function zng_take(level::Int)
     end
     z
 end
-zng_give(level::Int, z::ZNGStream) = (lock(CODEC_LOCK); push!(ZNG_POOL[level], z); unlock(CODEC_LOCK); nothing)
+zng_give(level::Int, z::ZNGStream) = (lock_sigatomic(CODEC_LOCK); push!(ZNG_POOL[level], z); unlock_sigatomic(CODEC_LOCK); nothing)
 
 # A gzip stream is one gzip member. Input is held until GZIP_SEGMENT bytes, a
 # flush or the end: a stream that ends first is compressed in one go by

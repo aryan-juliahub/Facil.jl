@@ -6,30 +6,61 @@ const PIN_COUNT = Dict{UInt,Int}()
 const PIN_LOCK = Threads.SpinLock()
 const BODY_DEALLOC = Ref{Ptr{Cvoid}}(C_NULL)
 
-function pin!(obj, p::Ptr{UInt8})
+@static if VERSION >= v"1.11-"
+    # The bytes facil.io reads belong to the vector's Memory: resizing a queued
+    # vector moves it to new Memory, and the old one stays pinned here.
+    pin_target(b::Vector{UInt8}, ::UInt) = getfield(b, :ref).mem
+    unshare!(::Vector{UInt8}, ::UInt) = nothing
+else
+    # A Julia 1.10 vector reallocates its buffer in place, so a queued vector is
+    # marked shared: resizing it throws instead of freeing what C still reads.
+    const SHARED_BIT = UInt16(1) << 14
+    const MARKED = Set{UInt}()
+    flags_ptr(b::Vector{UInt8}) = Ptr{UInt16}(pointer_from_objref(b)) + 2 * sizeof(Ptr{Cvoid})
+    function pin_target(b::Vector{UInt8}, k::UInt)
+        f = flags_ptr(b)
+        x = unsafe_load(f)
+        if x & 0x3 != 0x3 && x & SHARED_BIT == 0
+            unsafe_store!(f, x | SHARED_BIT)
+            push!(MARKED, k)
+        end
+        b
+    end
+    function unshare!(b::Vector{UInt8}, k::UInt)
+        k in MARKED || return nothing
+        delete!(MARKED, k)
+        f = flags_ptr(b)
+        unsafe_store!(f, unsafe_load(f) & ~SHARED_BIT)
+        nothing
+    end
+end
+pin_target(b::String, ::UInt) = b
+
+function pin!(obj::Union{String,Vector{UInt8}}, p::Ptr{UInt8})
     k = UInt(p)
-    lock(PIN_LOCK)
+    lock_sigatomic(PIN_LOCK)
     if haskey(PINNED, k)
         PIN_COUNT[k] = get(PIN_COUNT, k, 1) + 1
     else
-        PINNED[k] = obj
+        PINNED[k] = pin_target(obj, k)
     end
-    unlock(PIN_LOCK)
+    unlock_sigatomic(PIN_LOCK)
     nothing
 end
 
 function body_released(p::Ptr{Cvoid})
     k = UInt(p)
-    lock(PIN_LOCK)
+    lock_sigatomic(PIN_LOCK)
     n = get(PIN_COUNT, k, 1)
     if n > 2
         PIN_COUNT[k] = n - 1
     elseif n == 2
         delete!(PIN_COUNT, k)
     else
-        delete!(PINNED, k)
+        v = pop!(PINNED, k, nothing)
+        v isa Vector{UInt8} && unshare!(v, k)
     end
-    unlock(PIN_LOCK)
+    unlock_sigatomic(PIN_LOCK)
     nothing
 end
 
@@ -144,12 +175,12 @@ function log_error_key(e, bt)
     h
 end
 
-log_error_reset!() = lock(() -> empty!(ERROR_LOG), ERROR_LOG_LOCK)
+log_error_reset!() = (locked(() -> empty!(ERROR_LOG), ERROR_LOG_LOCK); nothing)
 
 function log_error(where::AbstractString, e, bt)
     t = log_error_key(e, bt)
     now = time()
-    suppressed = lock(ERROR_LOG_LOCK) do
+    suppressed = locked(ERROR_LOG_LOCK) do
         length(ERROR_LOG) >= ERROR_LOG_MAX && !haskey(ERROR_LOG, t) && empty!(ERROR_LOG)
         last, n = get(ERROR_LOG, t, (-Inf, 0))
         if now - last >= ERROR_LOG_INTERVAL

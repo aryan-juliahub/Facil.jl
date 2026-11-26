@@ -14,18 +14,18 @@ const DROPPED = Threads.Atomic{Int}(0)
 function put_result!(id::UInt64, res)
     i = shard(id)
     l = @inbounds RESULT_LOCKS[i]
-    lock(l)
+    lock_sigatomic(l)
     @inbounds RESULTS[i][id] = res
-    unlock(l)
+    unlock_sigatomic(l)
     nothing
 end
 
 function take_result!(id::UInt64)
     i = shard(id)
     l = @inbounds RESULT_LOCKS[i]
-    lock(l)
+    lock_sigatomic(l)
     res = pop!(@inbounds(RESULTS[i]), id, nothing)
-    unlock(l)
+    unlock_sigatomic(l)
     res
 end
 
@@ -86,14 +86,14 @@ function spawn_runner()
     nothing
 end
 
-jobs_waiting() = (lock(JOBS_LOCK); n = !isempty(JOBS); unlock(JOBS_LOCK); n)
+jobs_waiting() = (lock_sigatomic(JOBS_LOCK); n = !isempty(JOBS); unlock_sigatomic(JOBS_LOCK); n)
 
 # Runs `f()` on an idle worker, else on whichever runner or worker is free
 # first. `f` catches its own errors.
 function submit(@nospecialize(f))
-    lock(JOBS_LOCK)
+    lock_sigatomic(JOBS_LOCK)
     push!(JOBS, f)
-    unlock(JOBS_LOCK)
+    unlock_sigatomic(JOBS_LOCK)
     work_offer() == 1 && return nothing
     spawn_runner()
 end
@@ -128,9 +128,9 @@ function run_jobs()
 end
 
 function take_job()
-    lock(JOBS_LOCK)
+    lock_sigatomic(JOBS_LOCK)
     f = isempty(JOBS) ? nothing : popfirst!(JOBS)
-    unlock(JOBS_LOCK)
+    unlock_sigatomic(JOBS_LOCK)
     f
 end
 

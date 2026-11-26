@@ -236,7 +236,7 @@ end
 
 const RELOAD_LOCK = ReentrantLock()
 
-is_tls(@nospecialize(s::Server)) = s.cserver != C_NULL && (@ccall LIBFJL.fjl_tls_of(s.cserver::Ptr{Cvoid})::Ptr{Cvoid}) != C_NULL
+is_tls(@nospecialize(s::Server)) = with_cserver(cs -> (@ccall LIBFJL.fjl_tls_of(cs::Ptr{Cvoid})::Ptr{Cvoid}) != C_NULL, s, false)
 
 """
     reload!(server, cert, key; password = nothing, host = nothing) -> Server
@@ -291,9 +291,11 @@ function reload!(@nospecialize(s::Server), cert, key; password = nothing, host =
     host !== nothing && isempty(h) && throw(ArgumentError("reload!: host must not be empty"))
     c, k = read_pem(cert, "certificate"), read_pem(key, "key")
     lock(RELOAD_LOCK) do
-        isopen(s) || throw(ArgumentError("reload!: the server is closed"))
-        tls = @ccall LIBFJL.fjl_tls_of(s.cserver::Ptr{Cvoid})::Ptr{Cvoid}
-        set_cert!(tls, h, c, k, pw)
+        done = isopen(s) && with_cserver(s, false) do cs
+            set_cert!(@ccall(LIBFJL.fjl_tls_of(cs::Ptr{Cvoid})::Ptr{Cvoid}), h, c, k, pw)
+            true
+        end
+        done || throw(ArgumentError("reload!: the server is closed"))
     end
     s
 end

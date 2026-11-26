@@ -230,9 +230,9 @@ function respond(h::Ptr{Cvoid}, u::WebSocketUpgrade)
     ws = u.ws
     (@atomic ws.state) == WS_PENDING && ws.uuid == -1 || throw(ArgumentError("a WebSocketUpgrade can be returned only once"))
     key = pointer_from_objref(ws)
-    lock(LIVE_WS_LOCK)
+    lock_sigatomic(LIVE_WS_LOCK)
     LIVE_WS[key] = ws
-    unlock(LIVE_WS_LOCK)
+    unlock_sigatomic(LIVE_WS_LOCK)
     sp = something(u.subprotocol, "")
     GC.@preserve sp @ccall LIBFJL.fjl_ws_upgrade(h::Ptr{Cvoid}, key::Ptr{Cvoid}, u.flags::Cuint,
                                                  u.max_message_size::Csize_t, pointer(sp)::Ptr{UInt8},
@@ -265,8 +265,13 @@ See [`websocket`](@ref) for an example.
 """
 function send(ws::WebSocket, msg::Union{String,Vector{UInt8}})
     (@atomic ws.state) == WS_OPEN || return false
-    r = GC.@preserve msg @ccall LIBFJL.fjl_ws_send(ws.uuid::Int, pointer(msg)::Ptr{UInt8}, sizeof(msg)::Csize_t,
-                                                   (msg isa String)::Cint)::Cint
+    # GC-safe: the call can spin on a connection lock that a callback holds,
+    # and that callback may be waiting for a collection.
+    uuid, n, text = ws.uuid, sizeof(msg), Cint(msg isa String)
+    r = GC.@preserve msg begin
+        p = Ptr{UInt8}(pointer(msg))
+        @gcsafe_ccall LIBFJL.fjl_ws_send(uuid::Int, p::Ptr{UInt8}, n::Csize_t, text::Cint)::Cint
+    end
     r == 0
 end
 send(ws::WebSocket, msg::AbstractString) = send(ws, String(msg))
@@ -427,7 +432,7 @@ end
 The number of WebSocket connections that have been upgraded and not yet
 closed, across every server.
 """
-open_websockets() = (lock(LIVE_WS_LOCK); n = length(LIVE_WS); unlock(LIVE_WS_LOCK); n)
+open_websockets() = (lock_sigatomic(LIVE_WS_LOCK); n = length(LIVE_WS); unlock_sigatomic(LIVE_WS_LOCK); n)
 
 # ---- callbacks from the reactor ----
 
@@ -456,14 +461,14 @@ event_bytes(ev) = ev isa Union{String,Vector{UInt8}} ? sizeof(ev) : 0
 
 function enqueue!(ws::WebSocket, q::WSQueue, ev)
     n = event_bytes(ev)
-    lock(q.lock)
+    lock_sigatomic(q.lock)
     push!(q.items, ev)
     q.bytes += n
     start = !q.running
     start && (q.running = true)
     pause = !q.paused && q.bytes > WS_QUEUE_HIGH && !(ev isa WSClose)
     pause && (q.paused = true)
-    unlock(q.lock)
+    unlock_sigatomic(q.lock)
     pause && @ccall LIBFJL.fjl_ws_read_pause(ws.uuid::Int, 1::Cint)::Cint
     start && Threads.@spawn drain_queue!($ws, $q)
     nothing
@@ -471,17 +476,17 @@ end
 
 function drain_queue!(ws::WebSocket, q::WSQueue)
     while true
-        lock(q.lock)
+        lock_sigatomic(q.lock)
         if isempty(q.items)
             q.running = false
-            unlock(q.lock)
+            unlock_sigatomic(q.lock)
             return
         end
         ev = popfirst!(q.items)
         q.bytes -= event_bytes(ev)
         resume = q.paused && q.bytes < WS_QUEUE_LOW
         resume && (q.paused = false)
-        unlock(q.lock)
+        unlock_sigatomic(q.lock)
         resume && @ccall LIBFJL.fjl_ws_read_pause(ws.uuid::Int, 0::Cint)::Cint
         run_event(ws, ev)
     end
@@ -544,9 +549,9 @@ function ws_on_close(jl::Ptr{Cvoid}, ::Int, opened::Cint)
     try
         ws = ws_of(jl)
         @atomic ws.state = WS_CLOSED
-        lock(LIVE_WS_LOCK)
+        lock_sigatomic(LIVE_WS_LOCK)
         delete!(LIVE_WS, jl)
-        unlock(LIVE_WS_LOCK)
+        unlock_sigatomic(LIVE_WS_LOCK)
         opened != 0 && dispatch(ws, WSClose())
     catch e
         callback_error("WebSocket on_close", e, catch_backtrace())

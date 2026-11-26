@@ -112,9 +112,26 @@ mutable struct Server{F}
     const host::String
     const port::Int
     const options::ServerOptions
-    cserver::Ptr{Cvoid}
+    @atomic cserver::Ptr{Cvoid}
     @atomic state::Int
     const closed::Base.Event
+    @atomic users::Int
+end
+
+Server{F}(handler::F, host, port, options, cserver, state, closed) where {F} =
+    Server{F}(handler, host, port, options, cserver, state, closed, 0)
+
+# Calls f(cserver), or returns `released` once facil.io has released the C
+# server. on_release clears the pointer and waits for calls in progress, so
+# the C server outlives every call that saw it.
+function with_cserver(f, s::Server, released)
+    @atomic s.users += 1
+    try
+        cs = @atomic s.cserver
+        cs == C_NULL ? released : f(cs)
+    finally
+        @atomic s.users -= 1
+    end
 end
 
 const LIVE = Dict{Ptr{Cvoid},Server}()
@@ -221,7 +238,7 @@ function Base.close(s::Server; grace::Real = 0)
     grace > 0 && return drain_server!(s, grace)
     _, ok = @atomicreplace s.state OPEN => CLOSING
     ok || return nothing
-    if @ccall(LIBFJL.fjl_http_close(s.cserver::Ptr{Cvoid})::Cint) != 0
+    if with_cserver(cs -> @ccall(LIBFJL.fjl_http_close(cs::Ptr{Cvoid})::Cint), s, Cint(-1)) != 0
         # The reactor stopped, and every listener and connection with it.
         @atomic s.state = CLOSED
         notify(s.closed)
@@ -237,7 +254,7 @@ connections, requests in progress, streams, and WebSockets upgraded on it.
 `0` for a closed server. Useful for a metrics endpoint or to watch a drain.
 """
 connections(s::Server) = (@atomic s.state) == CLOSED ? 0 :
-    Int(@ccall LIBFJL.fjl_http_connections(s.cserver::Ptr{Cvoid})::Csize_t)
+    with_cserver(cs -> Int(@ccall LIBFJL.fjl_http_connections(cs::Ptr{Cvoid})::Csize_t), s, 0)
 
 function on_request(h::Ptr{Cvoid})
     try
@@ -257,8 +274,7 @@ function handle(@nospecialize(srv::Server), h::Ptr{Cvoid})
         return nothing
     end
     req === nothing && return nothing
-    t = stream_task(req)
-    t === nothing || return handle_stream_async(srv, h, req, t)
+    req isa StreamRun && return handle_stream_async(h, req)
     srv.options.inline || return handle_async(srv, h, req)
     res = try
         srv.handler(req)
@@ -294,7 +310,14 @@ end
 
 function on_release(udata::Ptr{Cvoid})
     try
-        lock(() -> delete!(LIVE, udata), LIVE_LOCK)
+        srv = locked(() -> pop!(LIVE, udata, nothing), LIVE_LOCK)
+        if srv !== nothing
+            @atomic srv.cserver = C_NULL
+            while (@atomic srv.users) != 0
+                ccall(:jl_cpu_pause, Cvoid, ())
+                GC.safepoint()
+            end
+        end
     catch e
         callback_error("releasing a server", e, catch_backtrace())
     end
@@ -497,12 +520,13 @@ function serve!(handler, host::AbstractString = "127.0.0.1", port::Integer = 808
                            public_folder_flags = folder_flags)
         cs = GC.@preserve folder @ccall LIBFJL.fjl_http_server_new(Ref(lo)::Ptr{ListenOptions}, ON_RELEASE[]::Ptr{Cvoid})::Ptr{Cvoid}
         cs == C_NULL && (ctls == C_NULL || tls_free(ctls); error("Facil: could not allocate a server"))
-        srv.cserver = cs
+        @atomic srv.cserver = cs
         apply_limits(cs, opts)
-        lock(() -> (LIVE[key] = srv), LIVE_LOCK)
+        locked(() -> (LIVE[key] = srv), LIVE_LOCK)
         err = listen!(srv, cs, h, string(p))
         err == 0 && return started(srv)
-        lock(() -> delete!(LIVE, key), LIVE_LOCK)
+        locked(() -> delete!(LIVE, key), LIVE_LOCK)
+        @atomic srv.cserver = C_NULL
         @ccall LIBFJL.fjl_http_server_free(cs::Ptr{Cvoid})::Cvoid
         (port == 0 && err == EADDRINUSE) && continue
         throw(SystemError("Facil: listening on $h:$p", err))

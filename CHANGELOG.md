@@ -104,6 +104,23 @@ First version. Nothing has been released or registered yet.
   tooling). `deps/build.jl` is now `deps/build_local.jl` and runs when Facil
   is precompiled, so the library is built on first load and rebuilt after a
   change in `deps/shim` or `deps/patches`; `Pkg.build("Facil")` does nothing.
+- Memory and thread safety (tests in `test/safety.jl`):
+  - `send(ws, msg)` from another thread no longer hangs the process when an
+    `on_ready` callback of that WebSocket starts a garbage collection, and
+    `unsubscribe(sub)` no longer hangs when that subscription's function does.
+  - Ctrl-C at the REPL can no longer land inside one of Facil's lock sections,
+    which left the lock held and stopped the reactor.
+  - A `Vector{UInt8}` body resized while it was still being sent no longer
+    sends freed memory: on Julia 1.11 and later the old memory is kept until
+    it is sent; on 1.10 the resize throws.
+  - A compressed `ResponseStream` written by two tasks, or written while it
+    closes, no longer corrupts or crashes its encoder: its writes take turns,
+    and a write after the close throws `Base.IOError`.
+  - A task handler that reads a streamed body (`Stream()`) owns its request's
+    `extensions`; the reactor no longer adds an internal entry after the
+    handler has started.
+  - `Facil.connections`, `close`, `reload!` and draining no longer read a
+    server's C state after facil.io has freed it.
 
 ### HttpTypes
 

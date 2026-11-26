@@ -56,9 +56,9 @@ end
 
 function take_posted(a::Ptr{Cvoid})
     id = UInt(a)
-    lock(POSTED_LOCK)
+    lock_sigatomic(POSTED_LOCK)
     f = pop!(POSTED, id, nothing)
-    unlock(POSTED_LOCK)
+    unlock_sigatomic(POSTED_LOCK)
     f
 end
 
@@ -89,9 +89,9 @@ Runs `f()` on a reactor thread at its next wake-up. Returns `false` (and drops
 """
 function on_reactor(f)
     id = Threads.atomic_add!(POSTED_NEXT, UInt(1)) + UInt(1)
-    lock(POSTED_LOCK)
+    lock_sigatomic(POSTED_LOCK)
     POSTED[id] = f
-    unlock(POSTED_LOCK)
+    unlock_sigatomic(POSTED_LOCK)
     if fjl_post(RUN_POSTED[], CANCEL_POSTED[], Ptr{Cvoid}(id)) != 0
         take_posted(Ptr{Cvoid}(id))
         return false

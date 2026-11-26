@@ -72,9 +72,9 @@ function subscribe(f, channel::AbstractString; spawn::Bool = false)
     ensure_reactor()
     s = Subscription(String(channel), f, spawn, C_NULL, true)
     key = pointer_from_objref(s)
-    lock(LIVE_SUBS_LOCK)
+    lock_sigatomic(LIVE_SUBS_LOCK)
     LIVE_SUBS[key] = s
-    unlock(LIVE_SUBS_LOCK)
+    unlock_sigatomic(LIVE_SUBS_LOCK)
     ch = s.channel
     p = GC.@preserve ch @ccall LIBFJL.fjl_ps_subscribe(pointer(ch)::Ptr{UInt8}, sizeof(ch)::Csize_t, key::Ptr{Cvoid})::Ptr{Cvoid}
     p == C_NULL && error("Facil: could not subscribe to $(repr(ch))")
@@ -92,7 +92,9 @@ does nothing.
 """
 function unsubscribe(s::Subscription)
     _, ok = @atomicreplace s.open true => false
-    ok && @ccall LIBFJL.fjl_ps_unsubscribe(s.ptr::Ptr{Cvoid})::Cvoid
+    # GC-safe: facil.io waits for a delivery in progress, whose callback may be
+    # waiting for a collection.
+    ok && @gcsafe_ccall LIBFJL.fjl_ps_unsubscribe(s.ptr::Ptr{Cvoid})::Cvoid
     nothing
 end
 Base.close(s::Subscription) = unsubscribe(s)
@@ -188,9 +190,9 @@ function ps_on_unsubscribe(jl::Ptr{Cvoid})
     try
         s = unsafe_pointer_to_objref(jl)::Subscription
         @atomic s.open = false
-        lock(LIVE_SUBS_LOCK)
+        lock_sigatomic(LIVE_SUBS_LOCK)
         delete!(LIVE_SUBS, jl)
-        unlock(LIVE_SUBS_LOCK)
+        unlock_sigatomic(LIVE_SUBS_LOCK)
     catch e
         callback_error("ending a subscription", e, catch_backtrace())
     end
@@ -207,9 +209,9 @@ end
 # facil.io's exit cleanup cannot end subscriptions that are still open, so they
 # end here, before the reactor stops; later callbacks are detached from Julia.
 function end_subscriptions()
-    lock(LIVE_SUBS_LOCK)
+    lock_sigatomic(LIVE_SUBS_LOCK)
     subs = collect(values(LIVE_SUBS))
-    unlock(LIVE_SUBS_LOCK)
+    unlock_sigatomic(LIVE_SUBS_LOCK)
     foreach(unsubscribe, subs)
     @ccall LIBFJL.fjl_ps_detach()::Cvoid
     nothing

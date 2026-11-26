@@ -474,9 +474,6 @@ mutable struct StreamRun
     a::Ptr{Cvoid}
     id::UInt64
 end
-struct StreamTask
-    run::StreamRun
-end
 
 """
     body_stream(req::Request) -> IO
@@ -535,8 +532,6 @@ julia> sum(length, body_chunks(req))
 """
 body_chunks(req::Request) = BodyChunks(body_stream(req))
 
-stream_task(req::Request) = (t = get(extensions(req), StreamTask, nothing); t === nothing ? nothing : t.run)
-
 # ---- C mirrors
 
 const B_NONE, B_VIEW, B_MALLOC, B_EXTERN, B_STREAM, B_FILE = Int32.(0:5)
@@ -582,7 +577,7 @@ mutable struct PendingBody
     failed::Bool
     on_chunk::Any
     stream::Union{BodyStream,Nothing}
-    req::Union{Request{String},Nothing}
+    run::Union{StreamRun,Nothing}
 end
 
 PendingBody(srv, head, kind) = PendingBody(srv, head, kind, UInt8[], Vector{UInt8}[], nothing, 0, false, false, nothing, nothing, nothing)
@@ -598,18 +593,18 @@ const BODY_ABORTS = Threads.Atomic{Int}(0)
 function put_pending!(st::PendingBody)
     id = Threads.atomic_add!(BODY_NEXT, UInt(1)) + UInt(1)
     i = body_shard(id)
-    lock(@inbounds PENDING_LOCKS[i])
+    lock_sigatomic(@inbounds PENDING_LOCKS[i])
     @inbounds PENDING[i][id] = st
-    unlock(@inbounds PENDING_LOCKS[i])
+    unlock_sigatomic(@inbounds PENDING_LOCKS[i])
     id
 end
 
 function get_pending(id::UInt; remove::Bool = false)
     i = body_shard(id)
     l = @inbounds PENDING_LOCKS[i]
-    lock(l)
+    lock_sigatomic(l)
     st = remove ? pop!(@inbounds(PENDING[i]), id, nothing) : get(@inbounds(PENDING[i]), id, nothing)
-    unlock(l)
+    unlock_sigatomic(l)
     st
 end
 
@@ -713,12 +708,14 @@ function plan_body!(@nospecialize(srv::Server), h::Ptr{Cvoid}, clen::Int64, plan
 end
 
 # Task handlers read a streamed body while it arrives: the handler starts now and
-# its result is collected once the body has ended (see handle_stream_async).
+# its result is collected once the body has ended (see handle_stream_async). The
+# request belongs to the handler from the spawn on.
 function start_stream_handler!(@nospecialize(srv::Server), st::PendingBody)
     req = new_request(st.head, "")
     s = st.stream::BodyStream
     insert!(extensions(req), BodyIO(s))
     r = StreamRun(0, nothing, C_NULL, UInt64(0))
+    st.run = r
     Threads.@spawn begin
         r.res = try
             srv.handler(req)
@@ -730,8 +727,6 @@ function start_stream_handler!(@nospecialize(srv::Server), st::PendingBody)
         end
         modifyfield!(r, :flags, |, 1, :acquire_release).first & 2 == 0 || finish_stream!(r)
     end
-    insert!(extensions(req), StreamTask(r))
-    st.req = req
     nothing
 end
 
@@ -742,7 +737,7 @@ function finish_stream!(r::StreamRun)
     nothing
 end
 
-function handle_stream_async(@nospecialize(srv::Server), h::Ptr{Cvoid}, req::Request, r::StreamRun)
+function handle_stream_async(h::Ptr{Cvoid}, r::StreamRun)
     id = Threads.atomic_add!(NEXT_ID, UInt64(1)) + UInt64(1)
     a = async_pause(h, id)
     if a == C_NULL
@@ -825,14 +820,14 @@ function new_chunk(n::Int)
     c == 0 && return Vector{UInt8}(undef, n)
     size = CHUNK_MIN << (c - 1)
     fresh = false
-    lock(CHUNK_LOCK)
+    lock_sigatomic(CHUNK_LOCK)
     fl = @inbounds CHUNK_FREE[c]
     p = isempty(fl) ? Ptr{UInt8}(C_NULL) : pop!(fl)
     if p == C_NULL && CHUNK_BYTES[] + size <= CHUNK_MAX
         CHUNK_BYTES[] += size
         fresh = true
     end
-    unlock(CHUNK_LOCK)
+    unlock_sigatomic(CHUNK_LOCK)
     if fresh
         p = Ptr{UInt8}(Libc.malloc(size))
         p == C_NULL && (drop_chunk_bytes(size); return Vector{UInt8}(undef, n))
@@ -844,16 +839,16 @@ function new_chunk(n::Int)
     v
 end
 
-drop_chunk_bytes(size) = (lock(CHUNK_LOCK); CHUNK_BYTES[] -= size; unlock(CHUNK_LOCK); nothing)
+drop_chunk_bytes(size) = (lock_sigatomic(CHUNK_LOCK); CHUNK_BYTES[] -= size; unlock_sigatomic(CHUNK_LOCK); nothing)
 
 # Runs as a finalizer: no task switch, and no allocation while the lock is held.
 function give_back_chunk(p::Ptr{UInt8}, c::Int)
     fl = @inbounds CHUNK_FREE[c]
-    lock(CHUNK_LOCK)
+    lock_sigatomic(CHUNK_LOCK)
     kept = length(fl) < CHUNK_KEEP ÷ (CHUNK_MIN << (c - 1))
     kept && push!(fl, p)
     kept || (CHUNK_BYTES[] -= CHUNK_MIN << (c - 1))
-    unlock(CHUNK_LOCK)
+    unlock_sigatomic(CHUNK_LOCK)
     kept || Libc.free(p)
     nothing
 end
@@ -866,19 +861,19 @@ const BLOCK_POOL = Vector{UInt8}[]
 const BLOCK_POOL_LOCK = Threads.SpinLock()
 
 function take_block()
-    lock(BLOCK_POOL_LOCK)
+    lock_sigatomic(BLOCK_POOL_LOCK)
     b = isempty(BLOCK_POOL) ? nothing : pop!(BLOCK_POOL)
-    unlock(BLOCK_POOL_LOCK)
+    unlock_sigatomic(BLOCK_POOL_LOCK)
     b === nothing ? Vector{UInt8}(undef, BLOCK_SIZE) : b
 end
 
 function release_blocks!(st::PendingBody)
     isempty(st.blocks) && return nothing
-    lock(BLOCK_POOL_LOCK)
+    lock_sigatomic(BLOCK_POOL_LOCK)
     for b in st.blocks
         length(BLOCK_POOL) < BLOCK_POOL_MAX && push!(BLOCK_POOL, b)
     end
-    unlock(BLOCK_POOL_LOCK)
+    unlock_sigatomic(BLOCK_POOL_LOCK)
     empty!(st.blocks)
     nothing
 end
@@ -924,10 +919,11 @@ function on_body_abort(udata::Ptr{Cvoid}, mode::Int32)
 end
 
 """
-    read_request(srv, h) -> Union{Request{String},Nothing}
+    read_request(srv, h) -> Union{Request{String},StreamRun,Nothing}
 
 The request on `h` with its body as `before_body` chose. `nothing` when the
-request has already been answered (rejected, or over a limit).
+request has already been answered (rejected, or over a limit); the
+`StreamRun` of a task handler that started when the head arrived.
 """
 function read_request(@nospecialize(srv::Server), h::Ptr{Cvoid})
     info = body_info(h)
@@ -971,7 +967,7 @@ function complete(st::PendingBody, h::Ptr{Cvoid}, info::BodyInfoC)
     elseif k == K_QUEUE
         s = st.stream::BodyStream
         finish!(s)
-        st.req === nothing || return st.req
+        st.run === nothing || return st.run
         req = new_request(st.head, "")
         insert!(extensions(req), BodyIO(s))
         return req

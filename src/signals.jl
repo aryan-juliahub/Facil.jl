@@ -25,10 +25,12 @@ function started(@nospecialize(srv::Server))
 end
 
 drain_start(@nospecialize(s::Server)) =
-    @ccall(LIBFJL.fjl_http_drain(s.cserver::Ptr{Cvoid}, 2::Cint)::Cint) == 0
+    with_cserver(cs -> @ccall(LIBFJL.fjl_http_drain(cs::Ptr{Cvoid}, 2::Cint)::Cint), s, Cint(-1)) == 0
+
+http_close(@nospecialize(s::Server)) = with_cserver(cs -> @ccall(LIBFJL.fjl_http_close(cs::Ptr{Cvoid})::Cint), s, Cint(-1))
 
 force_close(@nospecialize(s::Server)) =
-    if @ccall(LIBFJL.fjl_http_close(s.cserver::Ptr{Cvoid})::Cint) != 0
+    if http_close(s) != 0
         @atomic s.state = CLOSED
         notify(s.closed)
     end
@@ -106,7 +108,7 @@ function watch_signal()
     try
         wait(WATCH[])
         Threads.atomic_cas!(DRAIN, DRAIN_IDLE, DRAIN_RUNNING) == DRAIN_IDLE || return nothing
-        servers = lock(() -> Server[s for s in values(LIVE) if isopen(s)], LIVE_LOCK)
+        servers = locked(() -> Server[s for s in values(LIVE) if isopen(s)], LIVE_LOCK)
         any(s -> s.options.verbose, servers) && !isempty(servers) &&
             log_line("signal received; closing $(length(servers)) server(s), up to $(maximum(s -> s.options.shutdown_grace, servers)) s for open requests")
         foreach(s -> close(s; grace = s.options.shutdown_grace), servers)
@@ -172,7 +174,7 @@ function drain_at_exit(code::Integer)
             end
         end
         for s in servers
-            (@atomic s.state) == CLOSED || @ccall LIBFJL.fjl_http_close(s.cserver::Ptr{Cvoid})::Cint
+            (@atomic s.state) == CLOSED || http_close(s)
         end
         t = time() + 1
         while time() < t && any(s -> (@atomic s.state) != CLOSED, servers)

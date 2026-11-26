@@ -192,7 +192,7 @@ reconnects; answer the reconnect with status 204 to make it stop.
 function Base.close(s::SSEStream)
     _, ok = @atomicreplace s.closed false => true
     ok || return nothing
-    lock(s.lock) do
+    locked(s.lock) do
         if s.handle != C_NULL
             @gcsafe_ccall LIBFJL.fjl_sse_close(s.handle::Ptr{Cvoid})::Cint
             @gcsafe_ccall LIBFJL.fjl_sse_free(s.handle::Ptr{Cvoid})::Cvoid

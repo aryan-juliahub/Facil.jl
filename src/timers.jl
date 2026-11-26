@@ -35,7 +35,7 @@ const TIMER_FIRE = Ref{Ptr{Cvoid}}(C_NULL)
 const TIMER_READY = Threads.Atomic{Bool}(false)
 
 function take_waker()
-    lock(WAKERS_LOCK)
+    lock_sigatomic(WAKERS_LOCK)
     w = if isempty(WAKERS_FREE)
         x = Waker()
         push!(WAKERS_ALL, x)
@@ -43,11 +43,11 @@ function take_waker()
     else
         pop!(WAKERS_FREE)
     end
-    unlock(WAKERS_LOCK)
+    unlock_sigatomic(WAKERS_LOCK)
     w
 end
 
-give_waker(w::Waker) = (lock(WAKERS_LOCK); push!(WAKERS_FREE, w); unlock(WAKERS_LOCK); nothing)
+give_waker(w::Waker) = (lock_sigatomic(WAKERS_LOCK); push!(WAKERS_FREE, w); unlock_sigatomic(WAKERS_LOCK); nothing)
 
 function timer_fire(tokens::Ptr{Ptr{Cvoid}}, n::Cint)
     try

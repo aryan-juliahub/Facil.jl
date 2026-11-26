@@ -86,6 +86,13 @@ macro gcsafe_ccall(expr)
     end |> esc
 end
 
+# Ctrl-C reaches thread 1 at a safepoint, and between these calls it waits.
+# Lock sections that never yield use them, so an interrupt cannot leave a lock
+# held or the state it guards half-updated.
+@inline lock_sigatomic(l) = (ccall(:jl_sigatomic_begin, Cvoid, ()); lock(l))
+@inline unlock_sigatomic(l) = (unlock(l); ccall(:jl_sigatomic_end, Cvoid, ()))
+locked(f, l::ReentrantLock) = lock(() -> disable_sigint(f), l)
+
 fjl_version() = unsafe_string(@ccall LIBFJL.fjl_version()::Cstring)
 fjl_build_id() = unsafe_string(@ccall LIBFJL.fjl_build_id()::Cstring)
 

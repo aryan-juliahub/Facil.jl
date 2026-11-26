@@ -70,9 +70,12 @@ const ON_CI = get(ENV, "CI", "") == "true"
 
     @testset "interrupted sleep" begin
         t = Threads.@spawn F.sleep(10)
-        while !istaskstarted(t) || F.timer_stats().pending == 0
+        while !istaskstarted(t) || F.timer_stats().pending == 0 || t.queue === nothing
             yield()
         end
+        # Interrupting a task that is still entering its wait races with its
+        # own push onto the wait queue; it parks within microseconds.
+        Base.sleep(0.05)
         schedule(t, InterruptException(); error = true)
         @test_throws TaskFailedException wait(t)
         @test F.timer_stats().pending == 0
@@ -86,17 +89,26 @@ const ON_CI = get(ENV, "CI", "") == "true"
         @test n[] == 1
 
         ticks = Float64[]
+        gc0 = Base.gc_time_ns()
         t0 = time_ns()
         rep = F.Timer(t -> push!(ticks, (time_ns() - t0) / 1e6), 0.005; interval = 0.005)
         Base.sleep(0.2)
         close(rep)
         elapsed = (time_ns() - t0) / 1e6
+        gc_ms = (Base.gc_time_ns() - gc0) / 1e6
         @test !isopen(rep)
         k = length(ticks)
         Base.sleep(0.05)
         @test length(ticks) == k
-        # Late ticks are skipped, so a busy machine sees fewer, never more.
-        @test 5 <= k <= elapsed / 5 + 1
+        # Late ticks are skipped, so a busy machine sees fewer, never more. The
+        # lower bound holds only when the process itself did not stall: a pause
+        # that also delays Base.sleep, or a collection, stops every tick.
+        @test 1 <= k <= elapsed / 5 + 1
+        if elapsed < 220 && gc_ms < 20
+            @test k >= 5
+        else
+            @info "Timer test: process stalled; lower bound not checked" k elapsed gc_ms
+        end
         @test all(>=(5.0), ticks)
 
         m = Threads.Atomic{Int}(0)

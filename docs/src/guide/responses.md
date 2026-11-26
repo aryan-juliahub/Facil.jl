@@ -132,6 +132,11 @@ it. This is why large responses are cheap, and it has one rule:
     `resize!` it or put it back into a buffer pool. Returning the same constant
     body from many requests at once is fine.
 
+    Facil keeps the memory being sent alive, so this mistake changes the bytes
+    the client receives but does not crash the process. On Julia 1.10,
+    `resize!`, `append!` or `empty!` on a vector that is still being sent
+    throws `cannot resize array with shared data`.
+
 Strings are immutable, so this only concerns byte vectors.
 
 ## Redirects, errors and empty responses

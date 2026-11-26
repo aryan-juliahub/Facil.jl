@@ -25,13 +25,13 @@ const STREAM_KEY_TAG = UInt(0x5e) << 56
 
 function register_stream!(x)
     k = (Threads.atomic_add!(NEXT_STREAM, UInt(1)) + UInt(1)) | STREAM_KEY_TAG
-    lock(LIVE_STREAMS_LOCK)
+    lock_sigatomic(LIVE_STREAMS_LOCK)
     LIVE_STREAMS[k] = x
-    unlock(LIVE_STREAMS_LOCK)
+    unlock_sigatomic(LIVE_STREAMS_LOCK)
     k
 end
-unregister_stream!(k::UInt) = (lock(LIVE_STREAMS_LOCK); delete!(LIVE_STREAMS, k); unlock(LIVE_STREAMS_LOCK); nothing)
-find_stream(k::UInt) = (lock(LIVE_STREAMS_LOCK); x = get(LIVE_STREAMS, k, nothing); unlock(LIVE_STREAMS_LOCK); x)
+unregister_stream!(k::UInt) = (lock_sigatomic(LIVE_STREAMS_LOCK); delete!(LIVE_STREAMS, k); unlock_sigatomic(LIVE_STREAMS_LOCK); nothing)
+find_stream(k::UInt) = (lock_sigatomic(LIVE_STREAMS_LOCK); x = get(LIVE_STREAMS, k, nothing); unlock_sigatomic(LIVE_STREAMS_LOCK); x)
 
 """
     Facil.live_streams() -> Int
@@ -39,7 +39,7 @@ find_stream(k::UInt) = (lock(LIVE_STREAMS_LOCK); x = get(LIVE_STREAMS, k, nothin
 The number of streamed responses ([`stream`](@ref)) and event streams
 ([`sse`](@ref)) that are still open, across every server.
 """
-live_streams() = (lock(LIVE_STREAMS_LOCK); n = length(LIVE_STREAMS); unlock(LIVE_STREAMS_LOCK); n)
+live_streams() = (lock_sigatomic(LIVE_STREAMS_LOCK); n = length(LIVE_STREAMS); unlock_sigatomic(LIVE_STREAMS_LOCK); n)
 
 function on_stream_gone(udata::Ptr{Cvoid})
     try
@@ -119,14 +119,28 @@ mutable struct ResponseStream <: IO
     const drained::Base.Event
     key::UInt
     enc::Any
+    const codec_lock::Union{Nothing,ReentrantLock,Threads.SpinLock}
     @atomic gone::Bool
     @atomic closed::Bool
     @atomic flush_due::Bool
     corked::Int
 end
 
+# A compressed stream's encoder is used and freed under its codec lock, so a
+# write racing another or the close cannot reach freed or shared codec state.
+# On the reactor a write never blocks, so a spin lock is enough there.
 ResponseStream(uuid::Int, chunked::Bool, tls::Bool, on_task::Bool, high_water::Int, enc) =
-    ResponseStream(uuid, chunked, tls, on_task, high_water, Base.Event(true), UInt(0), enc, false, false, false, 0)
+    ResponseStream(uuid, chunked, tls, on_task, high_water, Base.Event(true), UInt(0), enc,
+                   enc === nothing ? nothing : on_task ? ReentrantLock() : Threads.SpinLock(), false, false, false, 0)
+
+function with_codec(f, s::ResponseStream)
+    l = s.codec_lock
+    if l isa ReentrantLock
+        lock(f, l)
+    else
+        lock(f, l::Threads.SpinLock)
+    end
+end
 
 mark_gone!(s::ResponseStream) = (@atomic s.gone = true; notify(s.drained); nothing)
 
@@ -230,7 +244,10 @@ function write_body(s::ResponseStream, b::Union{String,Vector{UInt8}})
     if e === nothing
         return raw_write(s, b)
     end
-    GC.@preserve b encode!(z -> raw_write(s, z), e, Ptr{UInt8}(pointer(b)), sizeof(b))
+    with_codec(s) do
+        isopen(s) || throw(stream_gone_error())
+        GC.@preserve b encode!(z -> raw_write(s, z), e, Ptr{UInt8}(pointer(b)), sizeof(b))
+    end
     sizeof(b)
 end
 
@@ -256,7 +273,7 @@ costs compression ratio. Does nothing once the stream is closed.
 function Base.flush(s::ResponseStream)
     isopen(s) || return nothing
     e = s.enc
-    e === nothing || encode_flush!(z -> raw_write(s, z), e)
+    e === nothing || with_codec(() -> isopen(s) && encode_flush!(z -> raw_write(s, z), e), s)
     sock_flush(s)
     nothing
 end
@@ -280,12 +297,14 @@ function Base.close(s::ResponseStream)
             if e === nothing
                 raw_write(s, UInt8[], true)
             else
-                pieces = Vector{UInt8}[]
-                encode_finish!(z -> push!(pieces, z), e)
-                for (i, z) in enumerate(pieces)
-                    raw_write(s, z, i == length(pieces))
+                with_codec(s) do
+                    pieces = Vector{UInt8}[]
+                    encode_finish!(z -> push!(pieces, z), e)
+                    for (i, z) in enumerate(pieces)
+                        raw_write(s, z, i == length(pieces))
+                    end
+                    isempty(pieces) && raw_write(s, UInt8[], true)
                 end
-                isempty(pieces) && raw_write(s, UInt8[], true)
             end
             s.chunked || sock_flush(s)
             @gcsafe_ccall LIBFJL.fjl_stream_end(s.uuid::Int, Ptr{Cvoid}(s.key)::Ptr{Cvoid}, Cint(s.chunked)::Cint, Cint(s.on_task ? 2 : 1)::Cint)::Cvoid
@@ -310,7 +329,7 @@ end
 
 function release!(s::ResponseStream)
     e = s.enc
-    e === nothing || encoder_free!(e)
+    e === nothing || with_codec(() -> encoder_free!(e), s)
     s.key == 0 || unregister_stream!(s.key)
     nothing
 end
