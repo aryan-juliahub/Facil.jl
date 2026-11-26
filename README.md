@@ -445,6 +445,8 @@ julia --project=docs docs/make.jl
 It covers each feature, the Rust-to-Julia name table for HttpTypes, migrating from
 HTTP.jl, the full benchmark scoreboard and the API reference.
 
+Contributors and coding agents: start with [AGENTS.md](AGENTS.md).
+
 ## Licence
 
 - Facil.jl: MIT.
