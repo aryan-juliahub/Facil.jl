@@ -1,6 +1,8 @@
 using BinaryBuilder, Pkg
 
 name = "facil_julia"
+# The version of Facil.jl at the commit below. It has no tag yet: Facil.jl is
+# registered and tagged only once this JLL exists.
 version = v"0.1.0"
 
 # The C library of Facil.jl: its shim (deps/shim) compiled together with
@@ -24,7 +26,7 @@ done
 # are compiled with a single command, as Facil.jl's deps/build.jl does.
 FLAGS=(-std=gnu11 -O2 -fPIC -DNDEBUG -DHAVE_OPENSSL -DFIO_TLS_FOUND)
 if [[ "${target}" == *-linux-* ]]; then
-    # http.c only detects tm_zone on BSD systems
+    # http.c assumes tm_zone only on BSD systems unless told
     FLAGS+=(-DHAVE_TM_TM_ZONE=1)
 fi
 if [[ "${target}" == *-musl* ]]; then
@@ -34,7 +36,7 @@ fi
 F=lib/facil
 mkdir -vp ${libdir}
 ${CC} -shared "${FLAGS[@]}" \
-    -DFJL_BUILD_ID="\"facil.io $(git rev-parse --short=8 HEAD) facil_julia_jll\"" \
+    -DFJL_BUILD_ID='"facil.io-'$(git rev-parse --short=8 HEAD)'-jll"' \
     -I${F} -I${F}/fiobj -I${F}/http -I${F}/http/parsers -I${F}/cli -I${F}/tls -I${F}/redis \
     -I${facil_jl}/deps/shim -I${includedir} \
     $(find ${F} -name '*.c' -not -path '*/legacy/*') ${facil_jl}/deps/shim/*.c \
@@ -49,6 +51,8 @@ platforms = supported_platforms()
 # facil.io has no Windows port, and the shim's timer thread exists for Linux
 # (timerfd) and macOS (kqueue) only: fjl_timer.c stops with #error elsewhere.
 filter!(p -> Sys.islinux(p) || Sys.isapple(p), platforms)
+# Zlib_jll 1.2.13 has no riscv64 build
+filter!(p -> arch(p) != "riscv64", platforms)
 
 products = [
     LibraryProduct("libfacil_julia", :libfacil_julia),
@@ -59,5 +63,6 @@ dependencies = [
     Dependency("Zlib_jll"; compat="1.2.13"),
 ]
 
+# The shim uses C11 atomics: GCC 4.8 has no stdatomic.h
 build_tarballs(ARGS, name, version, sources, script, platforms, products, dependencies;
-               julia_compat="1.10")
+               julia_compat="1.10", preferred_gcc_version=v"5")
