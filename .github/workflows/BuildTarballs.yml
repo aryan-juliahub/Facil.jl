@@ -114,6 +114,9 @@ jobs:
       - uses: julia-actions/setup-julia@v2
         with:
           version: ${{ matrix.julia }}
+      - name: One GC thread on Apple silicon
+        if: runner.os == 'macOS' && runner.arch == 'ARM64'
+        run: echo "JULIA_NUM_GC_THREADS=1" >> "$GITHUB_ENV"
       - name: Test Facil with the JLL
         run: |
           test ! -e deps/usr && test ! -e deps/facil.io/lib
