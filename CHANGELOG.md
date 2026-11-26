@@ -121,6 +121,10 @@ First version. Nothing has been released or registered yet.
     handler has started.
   - `Facil.connections`, `close`, `reload!` and draining no longer read a
     server's C state after facil.io has freed it.
+  - A task handler that finishes after its connection was closed (by
+    `close(server)` or a reactor stop) no longer answers another client whose
+    connection reused the descriptor and got the same facil.io id (it wraps
+    after 128 reuses); that crashed the process.
 
 ### HttpTypes
 
@@ -153,6 +157,8 @@ First version. Nothing has been released or registered yet.
 - Patch 18 (`kqueue-per-thread`): with more than one reactor thread on macOS,
   each thread owns a kqueue and closes only its own descriptors. This fixes a
   `close()` that could hang in the kernel forever (an unkillable process).
+- `deps/shim/fjl_async.c`: a paused request is linked to its connection and
+  dropped when that closes, instead of being resumed by its id.
 - A C shim (`deps/shim`) for request reading, no-copy sends, task hand-off,
   bodies, streaming, timers, WebSockets and TLS.
 - `deps/build_local.jl` builds the library with the system C compiler.

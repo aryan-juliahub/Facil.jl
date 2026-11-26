@@ -76,6 +76,45 @@ end
 println("OK")
 """
 
+# Connects to `port` until the server's connection gets the uuid that the
+# paused request had (same fd, counter wrapped), then waits on that one.
+const CHURN = raw"""
+using Sockets
+port, fd = parse(Int, ARGS[1]), parse(Int, ARGS[2])
+readline(stdin)
+function body_of(s)
+    n = 0
+    while true
+        l = readline(s)
+        isempty(l) && break
+        k, v = split(l, ':'; limit = 2)
+        lowercase(k) == "content-length" && (n = parse(Int, strip(v)))
+    end
+    String(read(s, n))
+end
+let target = -1
+    for i in 1:700
+        s = connect("127.0.0.1", port)
+        write(s, "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 70000\r\n\r\n" * "x"^70000)
+        readline(s)
+        u = parse(Int, body_of(s))
+        if target == -1
+            u >> 8 == fd || (println("OTHER FD"); exit())
+            target = (u >> 8) << 8 | ((u - 2) & 0xff)
+        end
+        if u == target
+            println("MATCH"); flush(stdout)
+            t = @async read(s)
+            timedwait(() -> istaskdone(t), 3.0)
+            println("GOT ", istaskdone(t) ? length(fetch(t)) : 0)
+            exit()
+        end
+        closewrite(s); read(s); close(s)
+    end
+    println("NO MATCH")
+end
+"""
+
 # The child's last line, or "HUNG" if it did not finish within `limit` seconds.
 function child(case; limit = 90)
     cmd = `$(Base.julia_cmd()) -t 4 --project=$(Base.active_project()) --startup-file=no -e $CHILD $case`
@@ -185,6 +224,47 @@ end
         @test String(copy(r.body)) == "200000"
         @test take!(seen) == 1
         close(s)
+    end
+
+    @testset "a late resume after the connection's uuid was reused" begin
+        uuids = Channel{Int}(1)
+        gate = Channel{Nothing}(1)
+        s1 = serve!(0; before_body = h -> Stream()) do req
+            put!(uuids, body_stream(req).uuid)
+            take!(gate)
+            "late"
+        end
+        s2 = serve!(req -> string(body_stream(req).uuid), 0; inline = true, before_body = h -> Stream())
+        a = connect("127.0.0.1", port(s1))
+        write(a, "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 70000\r\n\r\n" * "x"^70000)
+        fd = take!(uuids) >> 8
+        @test waitfor(() -> F.paused_requests() == 1)
+        cmd = `$(Base.julia_cmd()) --startup-file=no -e $CHURN $(port(s2)) $fd`
+        p = open(pipeline(cmd; stderr = devnull), "r+")
+        close(s1)
+        wait(s1)
+        # Every lower descriptor is taken, so the next connection gets the paused one's.
+        dummies = Cint[]
+        while (d = ccall(:open, Cint, (Cstring, Cint), "/dev/null", 0)) < fd
+            push!(dummies, d)
+        end
+        ccall(:close, Cint, (Cint,), d)
+        println(p, "go")
+        out = String[]
+        for l in eachline(p)
+            push!(out, l)
+            l == "MATCH" && put!(gate, nothing)
+        end
+        foreach(d -> ccall(:close, Cint, (Cint,), d), dummies)
+        isready(gate) || put!(gate, nothing)
+        if "MATCH" in out
+            @test last(out) == "GOT 0"
+        else
+            @info "uuid reuse not reached; the late resume was not exercised" out
+        end
+        @test waitfor(() -> F.paused_requests() == 0)
+        close(a)
+        close(s2)
     end
 
     @testset "waits on facil.io locks let a collection run" begin

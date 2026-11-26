@@ -12,12 +12,17 @@
 #include <time.h>
 #include <stdlib.h>
 
+/* `refs`: what the resume waits for (pause, done). `mem`: holders of the
+ * memory (resume path, close link). `gone` is set at close, before the fd can
+ * be reused, so a uuid whose 8-bit counter wrapped never resumes this request. */
 struct fjl_async_s {
   struct fjl_async_s *prev, *next;
   http_pause_handle_s *handle;
   intptr_t uuid;
   uint64_t id;
   atomic_int refs;
+  atomic_int mem;
+  atomic_int gone;
   int shard;
 };
 
@@ -78,7 +83,8 @@ static void touch_all(void *ignr) {
     shard_s *s = shards + i;
     fio_lock(&s->lock);
     for (fjl_async_s *a = s->head.next; a != &s->head; a = a->next)
-      fio_touch(a->uuid);
+      if (!atomic_load(&a->gone))
+        fio_touch(a->uuid);
     fio_unlock(&s->lock);
   }
   (void)ignr;
@@ -88,12 +94,30 @@ static void touch_stopped(void *ignr) {
   (void)ignr;
 }
 
+static void mem_unref(fjl_async_s *a) {
+  if (atomic_fetch_sub(&a->mem, 1) == 1)
+    free(a);
+}
+
+static void conn_gone(void *p) {
+  fjl_async_s *a = p;
+  atomic_store(&a->gone, 1);
+  mem_unref(a);
+}
+
+/* The close link holds a reference until it fires or is removed here. */
+static void unlink_conn(fjl_async_s *a) {
+  if (!fio_uuid_unlink(a->uuid, a))
+    mem_unref(a);
+}
+
 static void resumed(http_s *h) {
   fjl_async_s *a = h->udata;
   h->udata = NULL;
   uint64_t id = a->id;
   unlink_out(a);
-  free(a);
+  unlink_conn(a);
+  mem_unref(a);
   resume_cb(h, id);
 }
 
@@ -101,18 +125,42 @@ static void dropped(void *udata) {
   fjl_async_s *a = udata;
   uint64_t id = a->id;
   unlink_out(a);
-  free(a);
+  unlink_conn(a);
+  mem_unref(a);
   drop_cb(id);
+}
+
+/* A closed connection's pause handle is freed here: resuming it could reach
+ * another connection that got the same uuid. */
+static void resume_or_drop(fjl_async_s *a) {
+  if (atomic_load(&a->gone)) {
+    fio_free(a->handle);
+    dropped(a);
+    return;
+  }
+  http_resume(a->handle, resumed, dropped);
+}
+
+static void resume_task(void *a, void *b, void *c) {
+  resume_or_drop(a);
+  (void)b;
+  (void)c;
+}
+
+static void resume_cancel(void *a, void *b, void *c) {
+  dropped(a);
+  (void)b;
+  (void)c;
 }
 
 static int release(fjl_async_s *a) {
   if (atomic_fetch_sub(&a->refs, 1) != 1)
     return 0;
   if (fjl_on_reactor()) {
-    http_resume(a->handle, resumed, dropped);
+    resume_or_drop(a);
     return 0;
   }
-  if (fjl_resume(a->handle, resumed, dropped) == 0)
+  if (fjl_post(resume_task, resume_cancel, a, NULL, NULL) == 0)
     return 0;
   dropped(a);
   return -1;
@@ -135,7 +183,10 @@ fjl_async_s *fjl_async_pause(http_s *h, uint64_t id) {
   a->handle = NULL;
   a->shard = (int)(fio_uuid2fd(a->uuid) % FJL_SHARDS);
   atomic_store(&a->refs, 2);
+  atomic_store(&a->mem, 2);
+  atomic_store(&a->gone, 0);
   link_in(a);
+  fio_uuid_link(a->uuid, a, conn_gone);
   if (!atomic_exchange(&touching, 1))
     fio_run_every(touch_ms, 0, touch_all, NULL, touch_stopped);
   h->udata = a;
