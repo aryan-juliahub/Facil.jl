@@ -1,0 +1,132 @@
+name: BuildTarballs
+
+# Builds deps/yggdrasil/F/facil_julia with BinaryBuilder inside a checkout of
+# Yggdrasil, then runs the Facil suite against the generated facil_julia_jll.
+on:
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: JSON list of target triplets to build
+        default: '["x86_64-linux-gnu","aarch64-linux-gnu","i686-linux-gnu","armv6l-linux-gnueabihf","armv7l-linux-gnueabihf","powerpc64le-linux-gnu","riscv64-linux-gnu","x86_64-linux-musl","aarch64-linux-musl","i686-linux-musl","armv6l-linux-musleabihf","armv7l-linux-musleabihf","x86_64-apple-darwin","aarch64-apple-darwin"]'
+      tests:
+        description: Run the Facil suite against the built tarballs
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  RECIPE: yggdrasil/F/facil_julia
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(inputs.platforms) }}
+    env:
+      BINARYBUILDER_AUTOMATIC_APPLE: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: JuliaPackaging/Yggdrasil
+          path: yggdrasil
+          sparse-checkout: |
+            platforms
+      - name: Place the recipe
+        run: |
+          mkdir -p "$RECIPE"
+          cp -R deps/yggdrasil/F/facil_julia/. "$RECIPE"
+      - name: Read Yggdrasil's Julia version
+        id: jl
+        run: echo "version=$(sed -n 's/^julia_version = "\(.*\)"/\1/p' yggdrasil/Manifest.toml)" >> "$GITHUB_OUTPUT"
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ steps.jl.outputs.version }}
+      - uses: julia-actions/cache@v2
+        with:
+          cache-name: buildtarballs
+      - name: Allow BinaryBuilder's user-namespace sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Build
+        run: |
+          julia --project=yggdrasil -e 'using Pkg; Pkg.instantiate()'
+          cd "$RECIPE"
+          julia --project="$GITHUB_WORKSPACE/yggdrasil" build_tarballs.jl --verbose "${{ matrix.platform }}"
+          ls -l products
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tarball-${{ matrix.platform }}
+          path: ${{ env.RECIPE }}/products/*.tar.gz
+          if-no-files-found: error
+
+  # Deploys the tarball as a local facil_julia_jll, adds it to Facil's deps and
+  # runs the suite with no locally compiled library present.
+  test:
+    name: Test ${{ matrix.target.platform }} - Julia ${{ matrix.julia }}
+    if: inputs.tests && !cancelled()
+    needs: build
+    runs-on: ${{ matrix.target.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        julia: ['1.10', '1']
+        target:
+          - {os: ubuntu-latest, platform: x86_64-linux-gnu}
+          - {os: ubuntu-24.04-arm, platform: aarch64-linux-gnu}
+          - {os: macos-latest, platform: aarch64-apple-darwin}
+          - {os: macos-15-intel, platform: x86_64-apple-darwin}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: JuliaPackaging/Yggdrasil
+          path: yggdrasil
+          sparse-checkout: |
+            platforms
+      - name: Place the recipe
+        run: |
+          mkdir -p "$RECIPE"
+          cp -R deps/yggdrasil/F/facil_julia/. "$RECIPE"
+      - uses: actions/download-artifact@v4
+        with:
+          name: tarball-${{ matrix.target.platform }}
+          path: ${{ env.RECIPE }}/products
+      - name: Read Yggdrasil's Julia version
+        id: jl
+        run: echo "version=$(sed -n 's/^julia_version = "\(.*\)"/\1/p' yggdrasil/Manifest.toml)" >> "$GITHUB_OUTPUT"
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ steps.jl.outputs.version }}
+      - name: Deploy facil_julia_jll locally
+        run: |
+          julia --project=yggdrasil -e 'using Pkg; Pkg.instantiate()'
+          cd "$RECIPE"
+          julia --project="$GITHUB_WORKSPACE/yggdrasil" build_tarballs.jl --skip-build --deploy=local "${{ matrix.target.platform }}"
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia }}
+      - name: Test Facil with the JLL
+        run: |
+          test ! -e deps/usr && test ! -e deps/facil.io/lib
+          julia -e '
+            using TOML
+            jll = TOML.parsefile(joinpath(homedir(), ".julia", "dev", "facil_julia_jll", "Project.toml"))
+            p = TOML.parsefile("Project.toml")
+            p["deps"]["facil_julia_jll"] = jll["uuid"]
+            open(io -> TOML.print(io, p), "Project.toml", "w")'
+          julia --project=jllenv -e '
+            using Pkg
+            Pkg.develop([PackageSpec(path=joinpath(homedir(), ".julia", "dev", "facil_julia_jll")),
+                         PackageSpec(path="lib/HttpTypes"), PackageSpec(path=".")])
+            using Facil, Libdl
+            lib = Libdl.dlpath(Facil.libfjl_handle[])
+            println(lib, ": ", Facil.fjl_build_id())
+            occursin("artifacts", lib) || error("Facil did not load the JLL library")'
+          julia -t 4 --project=jllenv -e 'using Pkg; Pkg.test("Facil")'

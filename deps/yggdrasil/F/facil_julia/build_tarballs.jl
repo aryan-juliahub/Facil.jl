@@ -1,89 +1,63 @@
-# facil_julia_jll: facil.io with the Facil.jl patch series and C shim.
-# Upstream sources of truth: deps/patches and deps/shim in Facil.jl; bundled/
-# holds copies of both. Keep the build script identical to deps/build_tarballs.jl.
 using BinaryBuilder, Pkg
-
-const YGGDRASIL_DIR = "../.."
-include(joinpath(YGGDRASIL_DIR, "platforms", "macos_sdks.jl"))
 
 name = "facil_julia"
 version = v"0.1.0"
 
-const FACIL_COMMIT = "5128747363055201d3ecf0e29bf0a961703c9fa0"
-
+# The C library of Facil.jl: its shim (deps/shim) compiled together with
+# facil.io 0.7 at the commit Facil.jl pins, with Facil.jl's patch series
+# (deps/patches) applied. Facil.jl applies the same series when it builds the
+# library locally, so the patches live in its repository, not in bundled/.
 sources = [
-    GitSource("https://github.com/boazsegev/facil.io.git", FACIL_COMMIT),
-    DirectorySource("./bundled"),
+    GitSource("https://github.com/aryan-juliahub/Facil.jl.git", "26d804306e8c0b69f3d2e44fd533eacada3a0923"),
+    GitSource("https://github.com/boazsegev/facil.io.git", "5128747363055201d3ecf0e29bf0a961703c9fa0"),
 ]
 
 script = raw"""
 cd ${WORKSPACE}/srcdir/facil.io
-while IFS= read -r p || [[ -n "${p}" ]]; do
-    case "${p}" in ''|'#'*) continue ;; esac
-    atomic_patch -p1 "${WORKSPACE}/srcdir/patches/${p}"
-done < "${WORKSPACE}/srcdir/patches/series"
-
-F=lib/facil
-SHIM=${WORKSPACE}/srcdir/shim
-FLAGS=(-fPIC -O2 -DNDEBUG -std=gnu11)
-Q='"'
-DEFS=(-DHAVE_OPENSSL -DFIO_TLS_FOUND "-DFJL_BUILD_ID=${Q}facil.io ${FACIL_COMMIT:0:8} facil_julia_jll${Q}")
-if [[ "${target}" == *-linux-* ]]; then
-    DEFS+=(-DHAVE_TM_TM_ZONE=1 -D_LARGEFILE64_SOURCE)
-fi
-INCS=(-I${F} -I${F}/fiobj -I${F}/http -I${F}/http/parsers -I${F}/cli -I${F}/tls -I${F}/redis -I${SHIM} -I${includedir})
-
-mkdir -p obj
-objs=()
-i=0
-for c in $(find ${F} -name '*.c' -not -path '*/legacy/*' | sort) ${SHIM}/*.c; do
-    i=$((i + 1))
-    o="obj/${i}_$(basename ${c} .c).o"
-    if [[ "${c}" == ${SHIM}/* ]]; then
-        W=(-Wall -Wextra -Wno-unused-parameter)
-    else
-        W=(-w)
-    fi
-    ${CC} "${FLAGS[@]}" "${W[@]}" "${DEFS[@]}" "${INCS[@]}" -c "${c}" -o "${o}"
-    objs+=("${o}")
+facil_jl=${WORKSPACE}/srcdir/Facil.jl
+for p in $(cat ${facil_jl}/deps/patches/series); do
+    atomic_patch -p1 ${facil_jl}/deps/patches/${p}
 done
 
-LDFLAGS=(-shared)
-if [[ "${target}" == *-apple-* ]]; then
-    LDFLAGS+=(-Wl,-install_name,@rpath/libfacil_julia.${dlext})
-else
-    LDFLAGS+=(-Wl,-soname,libfacil_julia.${dlext})
+# facil.io's makefile builds only its own sources and sets feature macros from
+# probes that run test programs. The shim and facil.io are one library, so both
+# are compiled with a single command, as Facil.jl's deps/build.jl does.
+FLAGS=(-std=gnu11 -O2 -fPIC -DNDEBUG -DHAVE_OPENSSL -DFIO_TLS_FOUND)
+if [[ "${target}" == *-linux-* ]]; then
+    # http.c only detects tm_zone on BSD systems
+    FLAGS+=(-DHAVE_TM_TM_ZONE=1)
 fi
-mkdir -p ${libdir}
-${CC} "${LDFLAGS[@]}" -o ${libdir}/libfacil_julia.${dlext} "${objs[@]}" -L${libdir} -lssl -lcrypto -lz -lpthread -lm
-install_license LICENSE
+if [[ "${target}" == *-musl* ]]; then
+    # musl declares sendfile64 only with this macro
+    FLAGS+=(-D_LARGEFILE64_SOURCE)
+fi
+F=lib/facil
+mkdir -vp ${libdir}
+${CC} -shared "${FLAGS[@]}" \
+    -DFJL_BUILD_ID="\"facil.io $(git rev-parse --short=8 HEAD) facil_julia_jll\"" \
+    -I${F} -I${F}/fiobj -I${F}/http -I${F}/http/parsers -I${F}/cli -I${F}/tls -I${F}/redis \
+    -I${facil_jl}/deps/shim -I${includedir} \
+    $(find ${F} -name '*.c' -not -path '*/legacy/*') ${facil_jl}/deps/shim/*.c \
+    -o ${libdir}/libfacil_julia.${dlext} \
+    -L${libdir} -lssl -lcrypto -lz -lpthread -lm
+
+install_license ${facil_jl}/LICENSE
+install -Dvm 644 LICENSE ${prefix}/share/licenses/facil_julia/LICENSE.facil.io
 """
-script = "FACIL_COMMIT=$(FACIL_COMMIT)\n" * script
 
-# macOS x86_64 needs clock_gettime (10.12+); Julia 1.10 itself needs 10.14.
-sources, script = require_macos_sdk("10.14", sources, script)
-
-# fjl_timer.c supports macOS (kqueue) and Linux (timerfd) only.
-platforms = [
-    Platform("x86_64", "linux"; libc = "glibc"),
-    Platform("aarch64", "linux"; libc = "glibc"),
-    Platform("x86_64", "linux"; libc = "musl"),
-    Platform("aarch64", "linux"; libc = "musl"),
-    Platform("x86_64", "macos"),
-    Platform("aarch64", "macos"),
-]
+platforms = supported_platforms()
+# facil.io has no Windows port, and the shim's timer thread exists for Linux
+# (timerfd) and macOS (kqueue) only: fjl_timer.c stops with #error elsewhere.
+filter!(p -> Sys.islinux(p) || Sys.isapple(p), platforms)
 
 products = [
     LibraryProduct("libfacil_julia", :libfacil_julia),
 ]
 
-# Built against OpenSSL 3.0 headers; OpenSSL 3.x keeps ABI within the major
-# version, so the library also runs on the 3.5 that Julia >= 1.12 ships.
 dependencies = [
-    Dependency("OpenSSL_jll"; compat = "3.0.16"),
-    Dependency("Zlib_jll"),
+    Dependency("OpenSSL_jll"; compat="3.0.16"),
+    Dependency("Zlib_jll"; compat="1.2.13"),
 ]
 
-# C11 atomics in the shim need GCC >= 4.9.
 build_tarballs(ARGS, name, version, sources, script, platforms, products, dependencies;
-               julia_compat = "1.10", preferred_gcc_version = v"10")
+               julia_compat="1.10")
