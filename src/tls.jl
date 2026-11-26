@@ -284,6 +284,7 @@ julia> close(server)
 reload!(s::Server; cert, key, password = nothing, host = nothing) = reload!(s, cert, key; password, host)
 
 function reload!(@nospecialize(s::Server), cert, key; password = nothing, host = nothing)
+    isopen(s) || throw(ArgumentError("reload!: the server is closed"))
     is_tls(s) || throw(ArgumentError("reload!: the server does not serve HTTPS"))
     pw = password === nothing ? nothing : no_nul(String(password), "password")
     h = host === nothing ? "" : no_nul(String(host), "host")

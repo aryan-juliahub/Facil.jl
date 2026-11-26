@@ -158,3 +158,7 @@ First version. Nothing has been released or registered yet.
   first request (10–13 and variants), JSON building (19, 19a), task handlers at
   light load and uploads through a task (25, 31-p99, 31-cpu), macOS networking
   (7-c10, 26), GC tails (21a-p99, 21a-p999, 32). See `docs/src/reference/limits.md`.
+- Julia's garbage collector can free memory that is in use on Apple silicon
+  when it has more than one GC thread (seen with Julia 1.13.4; a script
+  without packages reproduces it). Run with `--gcthreads=1` there. CI does.
+  See the deployment guide.

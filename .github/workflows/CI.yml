@@ -36,6 +36,12 @@ jobs:
           version: ${{ matrix.julia }}
       - uses: julia-actions/cache@v2
 
+      # Julia's parallel page sweep can free live pages on Apple silicon (see the
+      # deployment guide); the GC stress tests force thousands of full collections.
+      - name: One GC thread on Apple silicon
+        if: runner.os == 'macOS' && runner.arch == 'ARM64'
+        run: echo "JULIA_NUM_GC_THREADS=1" >> "$GITHUB_ENV"
+
       # Julia >= 1.11 reads [sources] in Project.toml, so the repo project works as is.
       - name: Build libfacil_julia
         if: matrix.julia != '1.10'

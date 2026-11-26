@@ -54,6 +54,18 @@ julia -t 4 --gcthreads=4 --project=. server.jl
 - **`reactors`** stays at 1 unless you have measured that the event loop is
   the bottleneck.
 
+!!! warning "Apple silicon: use one GC thread"
+    On macOS with an Apple silicon CPU, run Julia with `--gcthreads=1` (or
+    `JULIA_NUM_GC_THREADS=1`). Julia's collector has a race between its
+    threads when they sweep in parallel: rarely, a full collection releases
+    memory that is still in use and the process crashes with a segmentation
+    fault in `gc_setmark_pool_`. It was seen with Julia 1.13.4 and the code is
+    the same in 1.12 and 1.13; it needs several GC threads and a heap of a few
+    megabytes, and it is not specific to Facil. A script with no packages
+    that calls `GC.gc(true)` in a loop crashed in 4 of 74 one-minute runs on
+    a macOS arm64 CI machine and in none of 40 with one GC thread. Linux, on
+    x86-64 and on ARM, did not crash in the same runs.
+
 Facil does not fork worker processes. One process serves one port and scales
 with threads.
 

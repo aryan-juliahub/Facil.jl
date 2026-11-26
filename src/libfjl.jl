@@ -110,18 +110,31 @@ end
 
 Calls `start(ptr::Ptr{FjlCall})::Cint`; when it returns 0, yields until the C side
 completes the call (through `uv_async_send`). Returns `nothing` if `start` failed.
+An exception thrown into the waiting task is rethrown once the call is complete.
 """
 function await_call(start)
     cond = Base.AsyncCondition()
     call = FjlCall(-1, 0, 0, cglobal(:uv_async_send), cond.handle)
+    interrupted = nothing
     try
         GC.@preserve call cond begin
             start(Ptr{FjlCall}(pointer_from_objref(call))) == 0 || return nothing
-            wait(cond)
+            # C writes to `call` and signals `cond` when it completes, so an
+            # exception thrown into the wait is held until then.
+            while true
+                try
+                    wait(cond)
+                    break
+                catch e
+                    interrupted === nothing && (interrupted = e)
+                    call.done != 0 && break
+                end
+            end
         end
     finally
         Base.close(cond)
     end
+    interrupted === nothing || throw(interrupted)
     call
 end
 

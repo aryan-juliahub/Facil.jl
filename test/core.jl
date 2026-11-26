@@ -380,6 +380,19 @@ end
     @test N_ERR[] == 0
 end
 
+@testset "a call interrupted while it waits" begin
+    ptr = Ref{Ptr{F.FjlCall}}(C_NULL)
+    t = @async F.await_call(p -> (ptr[] = p; Cint(0)))
+    @test wait_until(() -> ptr[] != C_NULL, 2.0)
+    schedule(t, ErrorException("interrupt"); error = true)
+    sleep(0.1)
+    @test !istaskdone(t)
+    ccall((:fjl_call_complete, F.LIBFJL), Cvoid, (Ptr{F.FjlCall}, Int, Cint), ptr[], 7, 0)
+    @test wait_until(() -> istaskdone(t), 2.0)
+    @test istaskfailed(t)
+    @test t.result isa ErrorException
+end
+
 @testset "GC stress: forced collections under load" begin
     port = free_port()
     uuid = listen_fixture(port, :gc)
