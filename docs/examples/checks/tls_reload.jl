@@ -7,15 +7,15 @@ subject() = read(pipeline(ignorestatus(`openssl s_client -connect 127.0.0.1:$(po
 try
     timer = example.watch_certificate(server, cert, key; interval_ms = 50)
     @test curl("--cacert", cert, "https://127.0.0.1:$(port(server))/") == "secure hello\n"
-    @test !occursin("O=renewed", subject())
+    @test !occursin(r"O ?= ?renewed", subject())
     # A key that does not match: nothing changes, the server keeps its certificate.
     Base.sleep(1.1)
     cp(joinpath(certs, "renewed_cert.pem"), cert; force = true)
     Base.sleep(0.3)
-    @test !occursin("O=renewed", subject())
+    @test !occursin(r"O ?= ?renewed", subject())
     cp(joinpath(certs, "renewed_key.pem"), key; force = true)
     Base.sleep(1.1); touch(cert)
-    @test wait_until(() -> occursin("O=renewed", subject()); timeout = 5)
+    @test wait_until(() -> occursin(r"O ?= ?renewed", subject()); timeout = 5)
     @test curl("--cacert", cert, "https://127.0.0.1:$(port(server))/") == "secure hello\n"
     close(server); wait(server)
     @test wait_until(() -> !isopen(timer); timeout = 5)
