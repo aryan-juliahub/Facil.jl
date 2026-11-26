@@ -1,9 +1,34 @@
 """
     HttpError <: Exception
 
-Supertype of every error this package throws: `InvalidMethod`, `InvalidStatusCode`,
-`InvalidHeaderName`, `InvalidHeaderValue`, `ToStrError`, `MaxSizeReached`,
-`InvalidUri`, `InvalidUriParts` and the wrapper [`HttpTypes.Error`](@ref).
+Supertype of every error this package throws.
+
+| Error | Thrown when |
+|:--|:--|
+| [`InvalidMethod`](@ref) | a method is not a valid token |
+| [`InvalidStatusCode`](@ref) | a status code is outside `100:999` |
+| [`InvalidHeaderName`](@ref) | a header name is not a valid token |
+| [`InvalidHeaderValue`](@ref) | a header value holds a forbidden byte |
+| [`ToStrError`](@ref) | [`to_str`](@ref) meets a byte outside visible ASCII |
+| [`MaxSizeReached`](@ref) | a [`HeaderMap`](@ref) would exceed its size limit |
+| [`InvalidUri`](@ref) | a URI or one of its components does not parse |
+| [`InvalidUriParts`](@ref) | [`UriParts`](@ref) do not combine into a URI |
+
+[`HttpTypes.Error`](@ref) wraps any of them in one concrete type.
+
+Catch `HttpError` to handle every validation failure in one place. Lookups that
+miss throw the usual Base errors instead (`KeyError`), and passing a value of the
+wrong type is a `MethodError` or `ArgumentError`.
+
+# Examples
+```jldoctest
+julia> try
+           Request(; method = "G T")
+       catch e
+           e isa HttpError, sprint(showerror, e)
+       end
+(true, "invalid HTTP method")
+```
 """
 abstract type HttpError <: Exception end
 export HttpError
@@ -11,16 +36,35 @@ export HttpError
 """
     HttpTypes.Error(err::HttpError)
 
-The crate's general `http::Error`: one type that any error from this package converts
-into, for code that wants a single error type. `get_ref(e)` is the wrapped error and
-`showerror` prints its message. Wrapping an `Error` returns it unchanged. Not exported.
+One concrete error type that wraps any [`HttpError`](@ref) (the crate's general
+`http::Error`). Not exported.
 
-    try
-        Request(; method = "G T")
-    catch e
-        err = HttpTypes.Error(e)
-        HttpTypes.get_ref(err) isa InvalidMethod   # true
-    end
+Nothing in this package throws an `Error`; it exists for code that wants to store
+or return a single error type.
+
+# Arguments
+- `err::HttpError`: the error to wrap. An `Error` is returned unchanged, so errors
+  never nest.
+
+# Returns
+An `Error`. [`HttpTypes.get_ref`](@ref) gives back the wrapped error. `showerror`
+prints the wrapped error's message. `convert(HttpTypes.Error, err)` does the same
+as the constructor.
+
+# Examples
+```jldoctest
+julia> err = HttpTypes.Error(InvalidMethod())
+HttpTypes.Error(InvalidMethod())
+
+julia> HttpTypes.get_ref(err) isa InvalidMethod
+true
+
+julia> HttpTypes.Error(err) === err
+true
+
+julia> sprint(showerror, err)
+"invalid HTTP method"
+```
 """
 struct Error <: HttpError
     inner::HttpError
@@ -28,9 +72,17 @@ struct Error <: HttpError
 end
 
 """
-    HttpTypes.get_ref(e::HttpTypes.Error)
+    HttpTypes.get_ref(e::HttpTypes.Error) -> HttpError
 
-The wrapped, more specific error. The crate's `e.is::<T>()` is `get_ref(e) isa T`.
+The specific error wrapped by an [`HttpTypes.Error`](@ref). Not exported.
+
+The crate's `e.is::<T>()` is `HttpTypes.get_ref(e) isa T`.
+
+# Examples
+```jldoctest
+julia> HttpTypes.get_ref(HttpTypes.Error(InvalidStatusCode()))
+InvalidStatusCode()
+```
 """
 get_ref(e::Error) = getfield(e, :inner)
 

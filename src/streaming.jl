@@ -36,7 +36,8 @@ find_stream(k::UInt) = (lock(LIVE_STREAMS_LOCK); x = get(LIVE_STREAMS, k, nothin
 """
     Facil.live_streams() -> Int
 
-Streamed responses and SSE connections that are still open.
+The number of streamed responses ([`stream`](@ref)) and event streams
+([`sse`](@ref)) that are still open, across every server.
 """
 live_streams() = (lock(LIVE_STREAMS_LOCK); n = length(LIVE_STREAMS); unlock(LIVE_STREAMS_LOCK); n)
 
@@ -84,12 +85,30 @@ end
 """
     ResponseStream <: IO
 
-The body of a streamed response, handed to the function given to
-[`stream`](@ref). `write` queues bytes (strings and byte vectors over 4 KiB are
-sent without a copy, so do not modify a vector after writing it), `flush`
-sends what is queued, `isopen` turns false once the client has gone, after
-which `write` throws an `IOError`. On a task, a write blocks while more than
-`high_water` bytes wait for a slow client.
+The body of a streamed response. [`stream`](@ref) passes one to your function.
+
+| Call | Effect |
+|:--|:--|
+| `write(io, x)` | queue a `String`, `Vector{UInt8}` or byte; `print(io, ...)` and `println` work too |
+| [`flush(io)`](@ref Base.flush(::ResponseStream)) | send what is queued now |
+| `isopen(io)` | `false` once the client has gone or the stream is closed |
+| [`close(io)`](@ref Base.close(::ResponseStream)) | end the body; done for you when your function returns |
+
+# Behaviour
+- Writes are buffered: on a task they are sent when 64 KiB is queued, when the
+  task next yields, or on `flush`. Call `flush` after each piece that the
+  client should see at once.
+- Back-pressure: on a task, `write` blocks while more than the stream's
+  `high_water` bytes wait for a slow client. On the reactor thread it never
+  blocks, so check [`Facil.pending_bytes`](@ref) yourself or use a task.
+- A `String` or `Vector{UInt8}` over 4 KiB is sent without a copy. Do not
+  change a vector after writing it.
+- The stream is write-only: `isreadable(io)` is `false`.
+- Write to it from one task at a time.
+
+# Throws
+`write` throws `Base.IOError` once the client has disconnected. If your
+function lets it propagate, the stream is ended quietly.
 """
 mutable struct ResponseStream <: IO
     const uuid::Int
@@ -181,10 +200,15 @@ function deferred_flush(s::ResponseStream)
 end
 
 """
-    Facil.wait_drain(s)
+    Facil.wait_drain(io)
 
-Blocks the calling task until no more than a quarter of the stream's
-`high_water` bytes wait to be sent, or the client is gone. Not for the reactor.
+Block the calling task until the client has taken most of what was written to
+`io` (a [`ResponseStream`](@ref) or [`SSEStream`](@ref)): no more than a
+quarter of its `high_water` is still queued, or the client has gone.
+
+`write` and [`write_event`](@ref) call this for you when the queue passes
+`high_water`. Call it yourself to wait before producing an expensive piece.
+Must not be called on the reactor thread.
 """
 function wait_drain(s)
     low = max(s.high_water >> 2, 0)
@@ -219,6 +243,16 @@ function Base.unsafe_write(s::ResponseStream, p::Ptr{UInt8}, n::UInt)
     write(s, v)
 end
 
+"""
+    flush(io::ResponseStream)
+
+Send everything written to `io` so far, instead of waiting for more.
+
+Call it after each piece the client should see immediately (a progress line, a
+log line being tailed). When the response is compressed, `flush` also ends the
+current compressed block so the client can decode what it has; flushing often
+costs compression ratio. Does nothing once the stream is closed.
+"""
 function Base.flush(s::ResponseStream)
     isopen(s) || return nothing
     e = s.enc
@@ -228,10 +262,14 @@ function Base.flush(s::ResponseStream)
 end
 
 """
-    close(s::ResponseStream)
+    close(io::ResponseStream)
 
-Ends the body (the terminating chunk) and lets the connection serve its next
-request. Called for you when the function given to [`stream`](@ref) returns.
+End the body of a streamed response.
+
+Sends the terminating chunk; the connection then serves its next request
+(an HTTP/1.0 connection is closed instead, which is how its body ends).
+[`stream`](@ref) calls this when your function returns, so call it only to end
+the body before doing more work. Closing twice does nothing.
 """
 function Base.close(s::ResponseStream)
     _, ok = @atomicreplace s.closed false => true
@@ -292,32 +330,75 @@ end
     stream(f, req; status = 200, headers = [], compress = :auto, level = 0,
            spawn = nothing, high_water = 1 MiB) -> Response
 
-A response whose body `f(io::ResponseStream)` writes while it is being sent;
-the handler returns it. HTTP/1.1 clients get `transfer-encoding: chunked` and
-keep their connection; HTTP/1.0 clients get a body ended by closing the
-connection. A HEAD request gets the head only (`f` is not called).
+Answer with a body that `f` writes piece by piece while it is being sent.
 
-```julia
-serve!(8080) do req
-    stream(req; headers = [header.CONTENT_TYPE => "text/plain"]) do io
-        for i in 1:10
-            write(io, "line \$i\\n")
-            Facil.sleep(0.1)
-        end
-    end
-end
+Return the result from your handler. Facil sends the response head, then calls
+`f(io)` with a [`ResponseStream`](@ref); the body ends when `f` returns.
+
+# Arguments
+- `f`: `f(io::ResponseStream)`. Write with `write`, `print` or `println`; call
+  `flush(io)` to push a piece out now.
+- `req`: the request being answered.
+
+# Keywords
+- `status = 200`: a [`StatusCode`](@ref) or an integer.
+- `headers = []`: `name => value` pairs or a [`HeaderMap`](@ref). Without a
+  `content-type`, `application/octet-stream` is sent.
+- `compress = :auto`: `:gzip`, `:br` or `:zstd` compresses the body and sets
+  `content-encoding`; `:auto` follows the server's `compress` option and the
+  request's `Accept-Encoding`; `nothing` never compresses.
+- `level::Integer = 0`: compression level; `0` is the encoding's default.
+- `spawn::Union{Nothing,Bool} = nothing`: where `f` runs. `nothing` follows the
+  server: on a worker task when the server runs task handlers, on the reactor
+  thread when it runs inline handlers. `true` or `false` overrides that. On
+  the reactor thread `f` must not block.
+- `high_water::Integer = 1 MiB`: on a task, `write` blocks while more than this
+  many bytes wait for the client.
+
+# Returns
+A [`Response`](@ref) to return from the handler. Nothing is sent until then.
+
+# Throws
+- `ArgumentError` if `high_water` is not positive or `compress` is not a known encoding.
+- [`InvalidStatusCode`](@ref) for a status outside `100:999`.
+
+# Notes
+- HTTP/1.1 clients get `transfer-encoding: chunked` and the connection stays
+  usable for further requests. HTTP/1.0 clients get a body that ends when the
+  connection closes.
+- A `HEAD` request gets the head only; `f` is not called.
+- If `f` throws, the error is logged and the connection is closed, so the
+  client sees an incomplete body rather than a truncated one that looks whole.
+  The status line has already been sent and cannot change.
+- When the client goes away, `isopen(io)` turns `false` and the next `write`
+  throws `Base.IOError`; `f` is then ended without logging.
+- A gzip body that ends within its first 128 KiB with no `flush` is
+  compressed in one pass by libdeflate; longer ones are streamed by zlib-ng.
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> import Downloads
+
+julia> server = serve!(0) do req
+           stream(req; headers = [header.CONTENT_TYPE => "text/plain"]) do io
+               for i in 1:3
+                   println(io, "line ", i)
+                   flush(io)
+               end
+           end
+       end;
+
+julia> print(String(take!(Downloads.download("http://127.0.0.1:\$(port(server))/", IOBuffer()))))
+line 1
+line 2
+line 3
+
+julia> close(server)
 ```
 
-`f` runs on its own task when the server runs task handlers (`inline = false`)
-and on the reactor for inline servers; `spawn = true/false` overrides that. On
-the reactor `f` must not block. If `f` throws, the connection is closed so the
-client sees an incomplete body.
-
-`compress = :gzip`, `:br` or `:zstd` compresses the body (on the thread running
-`f`) and sets `content-encoding`; `:auto` follows `serve!(...; compress)` and the
-request's `Accept-Encoding`; `nothing` never compresses. `level = 0` takes the
-default level. A gzip body that ends within its first 128 KiB, with no `flush`,
-is compressed in one pass by libdeflate; longer ones are streamed by zlib-ng.
+See the [streaming guide](@ref streaming-guide).
 """
 function stream(f, req = nothing; status = StatusCodes.OK, headers = HeaderMap{HeaderValue}(), compress = :auto,
                 level::Integer = 0, spawn::Union{Nothing,Bool} = nothing, high_water::Integer = 1024 * 1024)

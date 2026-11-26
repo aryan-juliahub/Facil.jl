@@ -5,8 +5,40 @@
 """
     Buffer()
 
-`before_body` result: receive the whole body into memory, then call the handler
-with it as `body(req)`. The default. Bodies over `body_in_memory` get a 413.
+A `before_body` result: read the whole request body into memory before the
+handler is called. This is the default.
+
+The handler gets the body as `body(req)`, a `String`. [`body_stream`](@ref)
+gives an `IOBuffer` over the same bytes.
+
+# Limits
+A body larger than the server's `body_in_memory` (default 16 MiB) gets a `413`
+and the handler is not called. For a body with a declared `content-length` the
+check happens before any of it is read; for a chunked body, once the limit is
+passed. `max_body_size` applies as well.
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> import Downloads
+
+julia> server = serve!(0; before_body = head -> Buffer()) do req
+           Response(StatusCodes.OK, "got \$(sizeof(body(req))) bytes")
+       end;
+
+julia> out = IOBuffer();
+
+julia> Downloads.request("http://127.0.0.1:\$(port(server))/"; method = "POST", input = IOBuffer("hello"), output = out);
+
+julia> String(take!(out))
+"got 5 bytes"
+
+julia> close(server)
+```
+
+See also [`Stream`](@ref), [`Spool`](@ref), [`Reject`](@ref) and the
+[request bodies guide](@ref bodies-guide).
 """
 struct Buffer end
 
@@ -14,13 +46,63 @@ struct Buffer end
     Stream(; on_chunk = nothing, high_water = 4 MiB)
     Stream(on_chunk)
 
-`before_body` result: the body is not kept. With `on_chunk`, each piece is passed
-to `on_chunk(bytes)` on the reactor thread as it arrives (`bytes` is valid only
-during the call; the function must not block), and the handler runs once the body
-has ended. Without it, the pieces are read from [`body_stream(req)`](@ref) or
-[`body_chunks(req)`](@ref): a task handler (`inline = false`) starts as soon as the
-head arrives and reading the socket pauses while more than `high_water` bytes are
-unread; an inline handler runs once the whole body has been queued.
+A `before_body` result: do not keep the request body; hand it over in pieces
+as it arrives.
+
+# Arguments
+- `on_chunk = nothing`: a function `on_chunk(bytes::Vector{UInt8})`, called on
+  the reactor thread for each piece as it arrives. `bytes` is valid only during
+  the call (copy it to keep it) and the function must not block. The handler
+  runs once the body has ended; `body(req)` is `""`.
+- `high_water::Integer = 4 MiB`: without `on_chunk`, reading from the socket
+  pauses while more than this many bytes are waiting to be read by a task
+  handler, and resumes when half of them are consumed.
+
+# Reading the body without `on_chunk`
+The handler reads the pieces from [`body_chunks(req)`](@ref) or the `IO`
+[`body_stream(req)`](@ref):
+- A task handler (`inline = false`) starts as soon as the request head has
+  arrived and reads the body while the client is still sending it. Unread data
+  beyond `high_water` holds the client back.
+- An inline handler runs once the whole body has been received and queued in
+  memory, so `Stream()` saves nothing there; use `on_chunk`.
+
+# Notes
+- `before_body` makes a new `Stream` for each request, so per-request state
+  can live in the `on_chunk` closure.
+- If `on_chunk` throws, the error is logged and the request gets a `500`.
+- If the client disconnects mid-body, a read in a task handler throws
+  [`Facil.BodyAborted`](@ref).
+- Each chunk read by a task handler crosses from the reactor thread to the
+  task. When the work per chunk does not block, `on_chunk` avoids that.
+
+# Examples
+Count the bytes of an upload without keeping them:
+
+```jldoctest
+julia> using Facil
+
+julia> import Downloads
+
+julia> server = serve!(0; before_body = head -> Stream()) do req
+           n = 0
+           for chunk in body_chunks(req)
+               n += length(chunk)
+           end
+           Response(StatusCodes.OK, "streamed \$n bytes")
+       end;
+
+julia> out = IOBuffer();
+
+julia> Downloads.request("http://127.0.0.1:\$(port(server))/"; method = "POST", input = IOBuffer("x"^100_000), output = out);
+
+julia> String(take!(out))
+"streamed 100000 bytes"
+
+julia> close(server)
+```
+
+See also [`Buffer`](@ref), [`Spool`](@ref), [`BodyStream`](@ref).
 """
 struct Stream{F}
     on_chunk::F
@@ -32,16 +114,77 @@ Stream(on_chunk) = Stream(; on_chunk)
 """
     Spool()
 
-`before_body` result: write the body to an unlinked temp file. The handler reads it
-with [`body_stream(req)`](@ref) (an `IOStream` at position 0); `body(req)` is empty.
+A `before_body` result: write the request body to a temporary file as it
+arrives, then call the handler.
+
+The handler reads the file through [`body_stream(req)`](@ref), an `IOStream`
+positioned at the start; `body(req)` is `""`. The file is already unlinked, so
+it disappears when the stream is closed or collected, whatever happens to the
+process. It is created in `tempdir()`.
+
+Use it for uploads that are too large for memory and that the handler wants as
+a seekable file. `max_body_size` still applies; raise it for large uploads.
+If writing fails (a full disk), the error is logged and the request gets a `500`.
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> import Downloads
+
+julia> server = serve!(0; before_body = head -> Spool()) do req
+           io = body_stream(req)
+           Response(StatusCodes.OK, "first line: " * readline(io))
+       end;
+
+julia> out = IOBuffer();
+
+julia> Downloads.request("http://127.0.0.1:\$(port(server))/"; method = "POST", input = IOBuffer("alpha\\nbeta\\n"), output = out);
+
+julia> String(take!(out))
+"first line: alpha"
+
+julia> close(server)
+```
 """
 struct Spool end
 
 """
-    Reject(status = 413)
+    Reject(status::Integer = 413)
 
-`before_body` result: answer `status` without reading the body and close the
-connection. No `100 Continue` is sent.
+A `before_body` result: answer `status` at once, without reading the request
+body, and close the connection. The handler is not called.
+
+# Arguments
+- `status`: a 4xx or 5xx status code. The response body is the status text.
+
+# Throws
+- `ArgumentError` if `status` is outside `400:599`.
+
+# Notes
+A client that sent `Expect: 100-continue` gets the final status instead of
+`100 Continue`, so it never sends the body. Other clients may see the
+connection close while they are still sending.
+
+# Examples
+Refuse uploads from clients that did not authenticate, before reading them:
+
+```jldoctest
+julia> using Facil
+
+julia> import Downloads
+
+julia> check(head) = haskey(headers(head), "authorization") ? Buffer() : Reject(401);
+
+julia> server = serve!(req -> "stored", 0; before_body = check);
+
+julia> r = Downloads.request("http://127.0.0.1:\$(port(server))/"; method = "POST", input = IOBuffer("data"), output = devnull);
+
+julia> r.status
+401
+
+julia> close(server)
+```
 """
 struct Reject
     status::Int
@@ -54,8 +197,33 @@ end
 """
     RequestHead
 
-What `before_body` receives: `method(head)`, `uri(head)`, `version(head)`,
-`headers(head)`, and `head.content_length` (`-1` for a chunked body).
+What `before_body` receives: a request whose body has not been read yet.
+
+Read it with the accessors of a request: `method(head)`, `uri(head)`,
+`version(head)` and `headers(head)`.
+
+# Fields
+- `head.content_length::Int`: the declared `content-length`, or `-1` when the
+  body is chunked and its length is not known yet
+  ([`Facil.ischunked(head)`](@ref Facil.ischunked)).
+
+`before_body` is called only for requests that have a body. It runs on the
+reactor thread, so decide from the head alone and do not block.
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> function choose(head::RequestHead)
+           method(head) == Methods.PUT || return Reject(405)
+           head.content_length > 1_000_000 && return Spool()
+           Buffer()
+       end;
+
+julia> server = serve!(req -> "ok", 0; before_body = choose);
+
+julia> close(server)
+```
 """
 struct RequestHead
     method::HttpMethod
@@ -69,22 +237,52 @@ HttpTypes.uri(h::RequestHead) = h.uri
 HttpTypes.version(h::RequestHead) = h.version
 HttpTypes.headers(h::RequestHead) = h.headers
 
-"`Facil.ischunked(head)`: the body has no declared length."
+"""
+    Facil.ischunked(head::RequestHead) -> Bool
+
+Whether the request body is sent with `transfer-encoding: chunked`, so its
+length is not known when `before_body` runs (`head.content_length == -1`).
+"""
 ischunked(h::RequestHead) = h.content_length < 0
 
 default_before_body(::RequestHead) = Buffer()
 
 # ---- the body stream handed to handlers
 
-"Thrown while reading a request body whose connection was lost."
+"""
+    Facil.BodyAborted <: Exception
+
+Thrown by a read from a [`BodyStream`](@ref) when the client's connection
+closed before the request body ended.
+
+A task handler that lets it propagate is ended quietly: nothing is logged and
+no response is sent, since nobody is left to read it. Catch it to clean up a
+partial upload.
+"""
 struct BodyAborted <: Exception end
 Base.showerror(io::IO, ::BodyAborted) = print(io, "the client's connection closed before the request body ended")
 
 """
     BodyStream <: IO
 
-A request body read as it arrives (`Stream()`): `read`, `readbytes!`, `eof`,
-`readavailable`, and iteration over chunks with [`body_chunks`](@ref).
+A request body read while it arrives. [`body_stream(req)`](@ref) returns one
+when `before_body` chose [`Stream`](@ref)`()`.
+
+It is a read-only `IO`: `read(io)`, `read(io, n)`, `read(io, UInt8)`,
+`readbytes!`, `readavailable`, `readline`, `eof` and `bytesavailable` work as
+on any stream. A read blocks the task until data arrives; `eof(io)` returns
+`true` once the client has sent the whole body. `close(io)` discards what is
+unread and lets the upload finish.
+
+# Throws
+Reads throw [`Facil.BodyAborted`](@ref) if the client disconnects mid-body,
+and `EOFError` when asked for more bytes than the body has.
+
+# Notes
+- [`body_chunks(req)`](@ref) iterates the same data piece by piece without
+  copying it into a buffer of your own.
+- When the handler returns, whatever it did not read is discarded.
+- Read it from one task at a time.
 """
 mutable struct BodyStream <: IO
     const cond::Base.GenericCondition{Threads.SpinLock}
@@ -245,7 +443,9 @@ function Base.read(s::BodyStream)
     take!(out)
 end
 
-"`body_chunks(req)` iterates over the body as `Vector{UInt8}` pieces, in arrival order."
+"""
+`body_chunks(req)` iterates over the body as `Vector{UInt8}` pieces, in arrival order.
+"""
 struct BodyChunks
     io::IO
 end
@@ -279,10 +479,29 @@ struct StreamTask
 end
 
 """
-    body_stream(req) -> IO
+    body_stream(req::Request) -> IO
 
-The request body as an `IO`: a [`BodyStream`](@ref) for `Stream()`, an `IOStream`
-for `Spool()`, and an `IOBuffer` over `body(req)` otherwise.
+The request body as a readable `IO`, whatever `before_body` chose.
+
+| `before_body` result | `body_stream(req)` |
+|:--|:--|
+| [`Buffer`](@ref)`()` (default) | an `IOBuffer` over `body(req)` |
+| [`Stream`](@ref)`()` | a [`BodyStream`](@ref) that yields data as it arrives |
+| [`Stream`](@ref)`(on_chunk)` | an empty stream (`on_chunk` consumed the body) |
+| [`Spool`](@ref)`()` | an `IOStream` on the temporary file, at position 0 |
+
+Each call returns the same stream for `Stream` and `Spool`, and a new
+`IOBuffer` for `Buffer`.
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> req = Request(Methods.POST, "/upload", "line one\\nline two\\n");
+
+julia> readline(body_stream(req))
+"line one"
+```
 """
 function body_stream(req::Request)
     b = get(extensions(req), BodyIO, nothing)
@@ -290,9 +509,29 @@ function body_stream(req::Request)
 end
 
 """
-    body_chunks(req)
+    body_chunks(req::Request)
 
-Iterates over the request body as `Vector{UInt8}` pieces; see [`body_stream`](@ref).
+An iterator over the request body in pieces, each a `Vector{UInt8}`, in the
+order they arrived.
+
+With [`Stream`](@ref)`()` the pieces are what the socket delivered (no fixed
+size) and iterating blocks until the next one arrives; the loop ends when the
+body does. With other `before_body` results it iterates
+[`body_stream(req)`](@ref) in whatever pieces that stream has ready.
+
+# Throws
+[`Facil.BodyAborted`](@ref) from the iteration if the client disconnects
+mid-body.
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> req = Request(Methods.POST, "/upload", "hello");
+
+julia> sum(length, body_chunks(req))
+5
+```
 """
 body_chunks(req::Request) = BodyChunks(body_stream(req))
 
@@ -374,7 +613,12 @@ function get_pending(id::UInt; remove::Bool = false)
     st
 end
 
-"`Facil.pending_bodies()`: request bodies being received (none once every upload has ended)."
+"""
+    Facil.pending_bodies() -> Int
+
+The number of request bodies being received right now, across every server.
+`0` once every upload has ended or been aborted.
+"""
 pending_bodies() = sum(i -> (lock(PENDING_LOCKS[i]); n = length(PENDING[i]); unlock(PENDING_LOCKS[i]); n), 1:BODY_SHARDS)
 
 function read_head(h::Ptr{Cvoid}, content_length::Integer)

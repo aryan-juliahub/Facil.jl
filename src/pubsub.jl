@@ -2,10 +2,13 @@
 # LIVE_SUBS until facil.io reports it gone (on_unsubscribe).
 
 """
-    Subscription
+    Facil.Subscription
 
-A process-local subscription returned by [`subscribe`](@ref); end it with
-`unsubscribe(sub)` or `close(sub)`.
+A subscription made by [`subscribe(f, channel)`](@ref subscribe(::Any, ::AbstractString)).
+
+`isopen(sub)` is `true` until it is ended with [`unsubscribe(sub)`](@ref unsubscribe(::Facil.Subscription))
+or `close(sub)`, which are the same. Keep the `Subscription` only if you intend
+to end it; it stays active without a reference.
 """
 mutable struct Subscription
     const channel::String
@@ -22,13 +25,48 @@ Base.isopen(s::Subscription) = @atomic s.open
 Base.show(io::IO, s::Subscription) = print(io, "Facil.Subscription(", repr(s.channel), isopen(s) ? "" : ", closed", ")")
 
 """
-    subscribe(f, channel; spawn = false) -> Subscription
+    subscribe(f, channel; spawn = false) -> Facil.Subscription
 
-Calls `f(msg::String)` for every message [`publish`](@ref)ed to `channel` in this
-process, in publishing order. `f` runs on the reactor thread and must not block,
-unless `spawn = true`, which runs each call on its own Julia task (order is then
-not kept). To forward a channel to WebSocket clients, use
-`subscribe(ws, channel)`, which runs no Julia code per message.
+Call `f(msg::String)` for every message published to `channel` in this process.
+
+# Arguments
+- `f`: the callback. It receives the message as a `String` (bytes published as
+  a vector arrive as a `String` holding those bytes).
+- `channel::AbstractString`: the channel name; matched exactly.
+
+# Keywords
+- `spawn::Bool = false`: `false` runs `f` on the reactor thread, one message at
+  a time in publishing order; `f` must not block. `true` runs each call on its
+  own Julia task: `f` may block, but calls can overlap and order is not kept.
+
+# Returns
+A [`Facil.Subscription`](@ref); pass it to [`unsubscribe`](@ref) to stop.
+
+# Notes
+- Starts the reactor if no server has yet.
+- An exception in `f` is logged; the subscription stays active.
+- To deliver a channel to WebSocket clients use
+  [`subscribe(ws, channel)`](@ref subscribe(::WebSocket, ::AbstractString)), which
+  runs no Julia code per message.
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> inbox = Channel{String}(8);
+
+julia> sub = subscribe(msg -> put!(inbox, msg), "news");
+
+julia> publish("news", "hello")
+
+julia> take!(inbox)
+"hello"
+
+julia> unsubscribe(sub)
+
+julia> isopen(sub)
+false
+```
 """
 function subscribe(f, channel::AbstractString; spawn::Bool = false)
     ensure_reactor()
@@ -45,9 +83,12 @@ function subscribe(f, channel::AbstractString; spawn::Bool = false)
 end
 
 """
-    unsubscribe(sub::Subscription)
+    unsubscribe(sub::Facil.Subscription)
+    close(sub::Facil.Subscription)
 
-Ends the subscription; no call to its function starts afterwards.
+End a subscription made with [`subscribe(f, channel)`](@ref subscribe(::Any, ::AbstractString)).
+No call to its function starts afterwards. Returns `nothing`; ending it twice
+does nothing.
 """
 function unsubscribe(s::Subscription)
     _, ok = @atomicreplace s.open true => false
@@ -57,11 +98,56 @@ end
 Base.close(s::Subscription) = unsubscribe(s)
 
 """
-    publish(channel, msg) -> Nothing
+    publish(channel, msg)
 
-Sends `msg` (a `String` or bytes) to every subscriber of `channel` in this
-process: [`subscribe`](@ref) callbacks and WebSocket clients subscribed with
-`subscribe(ws, channel)`. Works from any thread; delivery happens on the reactor.
+Send `msg` to every subscriber of `channel` in this process.
+
+# Arguments
+- `channel::AbstractString`: the channel name.
+- `msg`: a `String` or a byte vector. It is copied, so you may reuse the buffer.
+
+Subscribers are the callbacks registered with
+[`subscribe(f, channel)`](@ref subscribe(::Any, ::AbstractString)) and the
+WebSocket clients subscribed with
+[`subscribe(ws, channel)`](@ref subscribe(::WebSocket, ::AbstractString)).
+
+# Returns
+`nothing`. Publishing to a channel nobody subscribes to is not an error.
+
+# Notes
+- Safe from any task or thread. Delivery happens later, on the reactor thread;
+  `publish` does not wait for it.
+- Messages from one publishing thread are delivered in order.
+- Pub/sub is local to the process: nothing is sent to other processes or
+  machines.
+
+# Examples
+A handler that announces to every WebSocket client on the `"chat"` channel:
+
+```jldoctest
+julia> using Facil
+
+julia> import Downloads
+
+julia> seen = Channel{String}(8);
+
+julia> sub = subscribe(msg -> put!(seen, msg), "chat");
+
+julia> server = serve!(0) do req
+           publish("chat", body(req))
+           Response(StatusCodes.NO_CONTENT)
+       end;
+
+julia> r = Downloads.request("http://127.0.0.1:\$(port(server))/"; method = "POST", input = IOBuffer("deploy at 5"), output = devnull);
+
+julia> r.status
+204
+
+julia> take!(seen)
+"deploy at 5"
+
+julia> unsubscribe(sub); close(server)
+```
 """
 function publish(channel::AbstractString, msg::Union{String,Vector{UInt8}})
     ensure_reactor()

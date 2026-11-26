@@ -12,26 +12,71 @@ const TLS_REQUIRE_PEER_CERT = 2
               prefer_server_ciphers = false, client_ca = nothing,
               require_client_cert = false)
 
-Certificates and settings for an HTTPS server, given to [`serve!`](@ref) as `tls`.
+The certificate and TLS settings of an HTTPS server. Pass it to
+[`serve!`](@ref) as `tls`.
 
-`cert` and `key` are file paths or PEM text. `cert` may hold the whole chain,
-leaf first. `password` unlocks an encrypted key. Files are read when the
-`TLSConfig` is built, and each certificate is checked against its key, so a
-missing file, a wrong password or a mismatched pair throws here.
+# Arguments
+- `cert::AbstractString`: the certificate, as a file path or as PEM text. It
+  may hold the whole chain, leaf first.
+- `key::AbstractString`: its private key, as a file path or PEM text.
 
-- `sni`: extra certificates chosen by the name the client asks for, as
-  `(host, cert, key)` or `(host, cert, key, password)` tuples (the first form
-  uses `password`). `host` may be a wildcard such as `"*.example.com"`. Other
-  names get the default `cert`.
-- `min_version`, `max_version`: protocol range, `v"1.2"` or `v"1.3"`. TLS 1.0 and
-  1.1 also need `ciphers = "DEFAULT@SECLEVEL=0"` with OpenSSL 3.
-- `ciphers`: OpenSSL cipher list for TLS 1.2; `ciphersuites`: TLS 1.3 suites.
-- `prefer_server_ciphers`: the server's cipher order wins over the client's.
-- `client_ca`: CA certificates (path or PEM) that client certificates are
-  verified against. A client presenting another certificate is refused;
-  with `require_client_cert = true` a client presenting none is refused too.
+# Keywords
+- `password = nothing`: the passphrase of an encrypted `key`.
+- `sni = []`: more certificates, chosen by the server name the client asks for:
+  tuples `(host, cert, key)` or `(host, cert, key, password)`. `host` may be a
+  wildcard such as `"*.example.com"`. Clients asking for any other name, or
+  none, get `cert`.
+- `min_version::VersionNumber = v"1.2"`, `max_version = nothing`: the protocol
+  range, from `v"1.0"`, `v"1.1"`, `v"1.2"`, `v"1.3"`; `nothing` means no upper
+  bound. TLS 1.0 and 1.1 also need `ciphers = "DEFAULT@SECLEVEL=0"` with
+  OpenSSL 3, and should not be used.
+- `ciphers = nothing`: an OpenSSL cipher list for TLS 1.2 and below.
+- `ciphersuites = nothing`: the TLS 1.3 cipher suites, colon-separated.
+- `prefer_server_ciphers::Bool = false`: the server's order of ciphers wins
+  over the client's.
+- `client_ca = nothing`: CA certificates (file path or PEM text) to verify
+  client certificates against. A client that presents a certificate not signed
+  by them is refused.
+- `require_client_cert::Bool = false`: also refuse clients that present no
+  certificate (mutual TLS). Needs `client_ca`.
 
-HTTPS servers need `reactors = 1`.
+# Throws
+Everything is checked when the `TLSConfig` is built, not at the first connection.
+- `ArgumentError`: a file that does not exist or holds no PEM data, a
+  malformed `sni` entry, an unknown version, `max_version` below `min_version`,
+  `require_client_cert` without `client_ca`.
+- [`TLSError`](@ref): OpenSSL refused something: an unreadable certificate, a
+  wrong or missing key password, a key that does not match its certificate, a
+  bad cipher string.
+
+# Notes
+- Files are read once, here. Changing them on disk afterwards has no effect;
+  use [`reload!`](@ref) to rotate a certificate on a running server.
+- An HTTPS server needs `reactors = 1` (the default). Handlers still run on
+  all of Julia's threads.
+- Facil uses the OpenSSL that ships with Julia (`OpenSSL_jll`).
+- The verified client certificate is not exposed to the handler.
+
+# Examples
+The repository's test certificates stand in for your own here:
+
+```jldoctest
+julia> using Facil
+
+julia> certs = joinpath(pkgdir(Facil), "test", "certs");
+
+julia> tls = TLSConfig(joinpath(certs, "rsa_cert.pem"), joinpath(certs, "rsa_key.pem"); min_version = v"1.3")
+TLSConfig(1 certificate(s), TLS 1.3+)
+
+julia> server = serve!(req -> "secure", 0; tls);
+
+julia> isopen(server)
+true
+
+julia> close(server)
+```
+
+See the [HTTPS guide](@ref tls-guide).
 """
 struct TLSConfig
     cert::String
@@ -112,9 +157,25 @@ function read_pem(src, what)
 end
 
 """
-    TLSError
+    TLSError <: Exception
 
-A certificate, key or setting that OpenSSL refused.
+Thrown by [`TLSConfig`](@ref) and [`reload!`](@ref) when OpenSSL refuses a
+certificate, a key or a setting. `e.msg` says which and carries OpenSSL's own
+reason.
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> certs = joinpath(pkgdir(Facil), "test", "certs");
+
+julia> try
+           TLSConfig(joinpath(certs, "rsa_cert.pem"), joinpath(certs, "ec_key.pem"))
+       catch e
+           e isa TLSError
+       end
+true
+```
 """
 struct TLSError <: Exception
     msg::String
@@ -178,13 +239,47 @@ const RELOAD_LOCK = ReentrantLock()
 is_tls(@nospecialize(s::Server)) = s.cserver != C_NULL && (@ccall LIBFJL.fjl_tls_of(s.cserver::Ptr{Cvoid})::Ptr{Cvoid}) != C_NULL
 
 """
-    reload!(server, cert, key; password = nothing, host = nothing)
-    reload!(server; cert, key, password = nothing, host = nothing)
+    reload!(server, cert, key; password = nothing, host = nothing) -> Server
+    reload!(server; cert, key, password = nothing, host = nothing) -> Server
 
-Replaces the certificate of an HTTPS server while it runs: connections made
-from now on get the new one, open connections keep theirs. `host` picks an
-`sni` entry (a new host adds one); `nothing` replaces the default certificate.
-`cert` and `key` are paths or PEM text. A bad pair throws and changes nothing.
+Replace a certificate of a running HTTPS server, without dropping connections.
+
+# Arguments
+- `server`: a [`Server`](@ref) started with `tls`.
+- `cert`, `key`: the new pair, as file paths or PEM text. Files are read now.
+
+# Keywords
+- `password = nothing`: the passphrase of an encrypted `key`.
+- `host = nothing`: `nothing` replaces the default certificate. A host name
+  replaces that `sni` entry, or adds one if the name is new.
+
+# Returns
+`server`.
+
+# Throws
+- `ArgumentError`: the server does not serve HTTPS or is closed, a file is
+  missing or not PEM, `host` is empty.
+- [`TLSError`](@ref): OpenSSL refused the pair. Nothing is changed then; the
+  server keeps its current certificate.
+
+# Notes
+Connections made from now on get the new certificate. Connections that are
+already open keep the one they were made with. Call it from a timer or a
+signal-driven task after your ACME client has renewed the files.
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> certs = joinpath(pkgdir(Facil), "test", "certs");
+
+julia> server = serve!(req -> "secure", 0; tls = TLSConfig(joinpath(certs, "rsa_cert.pem"), joinpath(certs, "rsa_key.pem")));
+
+julia> reload!(server; cert = joinpath(certs, "renewed_cert.pem"), key = joinpath(certs, "renewed_key.pem")) === server
+true
+
+julia> close(server)
+```
 """
 reload!(s::Server; cert, key, password = nothing, host = nothing) = reload!(s, cert, key; password, host)
 

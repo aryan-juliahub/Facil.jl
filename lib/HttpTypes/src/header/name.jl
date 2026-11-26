@@ -1,10 +1,22 @@
 export HeaderName, InvalidHeaderName, header, as_str, from_lowercase, from_static, @hn_str
 
 """
-    InvalidHeaderName
+    InvalidHeaderName <: HttpError
 
-Thrown when bytes are not a valid header field name (an RFC 9110 token of
-1 to 65535 bytes).
+Thrown by [`HeaderName`](@ref), and by every [`HeaderMap`](@ref) function that
+has to build a name from a string, when the source is not a valid header field
+name: an RFC 9110 token of 1 to 65,535 bytes. The message is
+`invalid HTTP header name`.
+
+# Examples
+```jldoctest
+julia> HeaderName("bad name")
+ERROR: invalid HTTP header name
+[...]
+
+julia> tryparse(HeaderName, "") === nothing
+true
+```
 """
 struct InvalidHeaderName <: HttpError end
 Base.showerror(io::IO, ::InvalidHeaderName) = print(io, "invalid HTTP header name")
@@ -13,11 +25,57 @@ const MAX_HEADER_NAME_LEN = (1 << 16) - 1
 
 """
     HeaderName(src)
+    HeaderName(ptr::Ptr{UInt8}, len::Integer)
     tryparse(HeaderName, src)
+    parse(HeaderName, src)
 
-A header field name, stored lowercase. `src` is a string, a byte vector, or a
-pointer and length; uppercase is folded. Standard names are interned
-(`header.CONTENT_TYPE`), so comparing two of them compares one integer.
+A header field name, stored in lowercase.
+
+Header names are case-insensitive in HTTP; a `HeaderName` folds uppercase ASCII
+letters when it is built, so two names that differ only in case are the same
+value. The 81 standard names are constants in `header`
+(`header.CONTENT_TYPE`, ...); parsing one of them returns that constant, and
+comparing two standard names compares one integer.
+
+# Arguments
+- `src`: an `AbstractString` or `AbstractVector{UInt8}`, or a `HeaderName`
+  (returned as is).
+- `ptr`, `len`: a pointer to `len` bytes holding the name.
+
+# Returns
+A `HeaderName`. `tryparse` returns `nothing` instead of throwing.
+
+# Throws
+- [`InvalidHeaderName`](@ref) if the source is empty, longer than 65,535 bytes,
+  or holds a byte that is not a token character (space, `:`, control bytes and
+  non-ASCII bytes are all rejected).
+
+# Notes
+- `name == "Content-Type"` compares with a string, ignoring ASCII case.
+- [`as_str`](@ref), `string(name)`, `String(name)` and `print` give the lowercase
+  text; `show` prints the literal `hn"content-type"`.
+- `hash(name)` differs from the hash of the equal string, so do not mix
+  `HeaderName` and `String` keys in one `Dict`. A [`HeaderMap`](@ref) accepts
+  both.
+- For a literal name, [`hn"..."`](@ref @hn_str) validates when the code is
+  parsed and costs nothing at run time.
+
+# Examples
+```jldoctest
+julia> HeaderName("Content-Type")
+hn"content-type"
+
+julia> HeaderName("Content-Type") === header.CONTENT_TYPE
+true
+
+julia> name = HeaderName("X-Request-Id")
+hn"x-request-id"
+
+julia> name == "x-request-ID", string(name)
+(true, "x-request-id")
+```
+
+See also [`from_lowercase`](@ref), [`from_static`](@ref).
 """
 struct HeaderName
     id::UInt16
@@ -26,8 +84,23 @@ struct HeaderName
 end
 
 """
-The standard header names, in the order of their ids. `HttpTypes.standard_header(i)`
-and `HttpTypes.standard_index(name)` convert between the two.
+    HttpTypes.STANDARD_HEADER_TABLE
+
+The 81 standard header names as a tuple of `(constant::Symbol, name::String)`,
+in the order of their ids: entry `i` is the constant `header.<constant>` and
+its lowercase name. Not exported.
+
+[`HttpTypes.standard_header`](@ref) and [`HttpTypes.standard_index`](@ref)
+convert between a name and its id.
+
+# Examples
+```jldoctest
+julia> HttpTypes.STANDARD_HEADER_TABLE[1]
+(:ACCEPT, "accept")
+
+julia> length(HttpTypes.STANDARD_HEADER_TABLE)
+81
+```
 """
 const STANDARD_HEADER_TABLE = (
     (:ACCEPT, "accept"),
@@ -113,7 +186,28 @@ const STANDARD_HEADER_TABLE = (
     (:X_XSS_PROTECTION, "x-xss-protection"),
 )
 
-"Constants for the standard header names, e.g. `header.CONTENT_TYPE`."
+"""
+    header
+
+The standard header names as [`HeaderName`](@ref HttpTypes.HeaderName) constants, named as in the
+`http` crate: `header.ACCEPT`, `header.AUTHORIZATION`, `header.CACHE_CONTROL`,
+`header.CONTENT_LENGTH`, `header.CONTENT_TYPE`, `header.COOKIE`, `header.HOST`,
+`header.LOCATION`, `header.SET_COOKIE`, `header.USER_AGENT` and so on, 81 in
+all ([`HttpTypes.STANDARD_HEADER_TABLE`](@ref) lists them).
+
+The constant for a name is its uppercase form with `-` replaced by `_`. The
+constants are not exported one by one; write `header.CONTENT_TYPE`. Names
+without a constant are written `hn"x-request-id"`.
+
+# Examples
+```jldoctest
+julia> header.CONTENT_TYPE
+hn"content-type"
+
+julia> header.CONTENT_TYPE == "Content-Type"
+true
+```
+"""
 baremodule header end
 for (i, (k, s)) in enumerate(STANDARD_HEADER_TABLE)
     Core.eval(header, :(const $k = $(_h_name_unchecked(UInt16(i), s))))
@@ -123,16 +217,37 @@ const _H_STANDARD = [_h_name_unchecked(UInt16(i), s) for (i, (_, s)) in enumerat
 const _H_MAX_STANDARD_LEN = maximum(t -> sizeof(t[2]), STANDARD_HEADER_TABLE)
 
 """
-    HttpTypes.standard_header(i)
+    HttpTypes.standard_header(i::Integer) -> HeaderName
 
-The standard `HeaderName` with id `i` (its position in `STANDARD_HEADER_TABLE`).
+The standard [`HeaderName`](@ref) with id `i`, its position in
+[`HttpTypes.STANDARD_HEADER_TABLE`](@ref). Not exported.
+
+`i` must be in `1:81`; it is not checked (an out-of-range id is undefined
+behaviour). Meant for parsers that have already matched a standard name.
+
+# Examples
+```jldoctest
+julia> HttpTypes.standard_header(1)
+hn"accept"
+```
 """
 @inline standard_header(i::Integer) = @inbounds _H_STANDARD[i]
 
 """
-    HttpTypes.standard_index(name)
+    HttpTypes.standard_index(name::HeaderName) -> Int
 
-The id of a standard `HeaderName`, or 0 for a custom one.
+The id of a standard [`HeaderName`](@ref) (its position in
+[`HttpTypes.STANDARD_HEADER_TABLE`](@ref)), or `0` for any other name.
+Not exported.
+
+# Examples
+```jldoctest
+julia> HttpTypes.standard_index(header.ACCEPT)
+1
+
+julia> HttpTypes.standard_index(hn"x-request-id")
+0
+```
 """
 @inline standard_index(h::HeaderName) = Int(getfield(h, :id))
 
@@ -243,9 +358,27 @@ Base.parse(::Type{HeaderName}, src::Union{AbstractString,AbstractVector{UInt8}})
 Base.convert(::Type{HeaderName}, src::Union{AbstractString,AbstractVector{UInt8}}) = HeaderName(src)
 
 """
-    from_lowercase(HeaderName, src)
+    from_lowercase(HeaderName, src) -> HeaderName
 
-Like `HeaderName(src)` but rejects uppercase instead of folding it (the HTTP/2 rule).
+Like `HeaderName(src)`, but an uppercase letter is an error instead of being
+folded. This is the rule for HTTP/2 and HTTP/3 field names.
+
+# Arguments
+- `src`: an `AbstractString` or `AbstractVector{UInt8}`.
+
+# Throws
+- [`InvalidHeaderName`](@ref) if `src` is not a valid name or holds an uppercase
+  ASCII letter.
+
+# Examples
+```jldoctest
+julia> from_lowercase(HeaderName, "x-request-id")
+hn"x-request-id"
+
+julia> from_lowercase(HeaderName, "X-Request-Id")
+ERROR: invalid HTTP header name
+[...]
+```
 """
 function from_lowercase(::Type{HeaderName}, src::BytesLike)
     h = GC.@preserve src _h_tryparse_name(_ptr(src), _nbytes(src), _H_CHARS_H2)
@@ -256,14 +389,52 @@ from_lowercase(::Type{HeaderName}, src::Union{AbstractString,AbstractVector{UInt
     from_lowercase(HeaderName, Vector{UInt8}(src))
 
 """
-    from_static(HeaderName, s)
+    from_static(HeaderName, s::String) -> HeaderName
+    from_static(HeaderValue, s::String) -> HeaderValue
 
-A `HeaderName` from a literal that must already be lowercase. Prefer `hn"..."`,
-which checks it when the code is parsed.
+A [`HeaderName`](@ref) or [`HeaderValue`](@ref) from a string literal (the
+crate's `from_static`).
+
+Prefer the string macros [`hn"..."`](@ref @hn_str) and
+[`hv"..."`](@ref @hv_str): they do the same check once, when the code is parsed.
+
+# Arguments
+- `s::String`: for a `HeaderName`, a valid name that is already lowercase; for a
+  `HeaderValue`, visible ASCII (tabs allowed).
+
+# Throws
+- [`InvalidHeaderName`](@ref) for an invalid name or one with an uppercase letter.
+- [`InvalidHeaderValue`](@ref) for an invalid value.
+
+# Examples
+```jldoctest
+julia> from_static(HeaderName, "x-request-id")
+hn"x-request-id"
+
+julia> from_static(HeaderValue, "text/plain")
+hv"text/plain"
+```
 """
 from_static(::Type{HeaderName}, src::String) = from_lowercase(HeaderName, src)
 
-"`hn\"x-request-id\"` is a `HeaderName` validated when the code is parsed."
+"""
+    hn"name"
+
+A [`HeaderName`](@ref) literal, checked when the code is parsed.
+
+The text must be a valid header name written in lowercase; anything else is an
+error at macro expansion ([`InvalidHeaderName`](@ref)), before the program runs.
+A standard name gives the same value as its `header` constant.
+
+# Examples
+```jldoctest
+julia> hn"x-request-id"
+hn"x-request-id"
+
+julia> hn"content-type" === header.CONTENT_TYPE
+true
+```
+"""
 macro hn_str(s)
     return from_static(HeaderName, s)
 end

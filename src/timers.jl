@@ -100,12 +100,39 @@ end
 to_ns(s::Real) = s >= 1e9 ? typemax(Int64) % UInt64 : round(UInt64, max(s, 0) * 1e9)
 
 """
-    Facil.sleep(seconds)
+    Facil.sleep(seconds::Real)
 
-Blocks the current task for `seconds`, timed by Facil's timer thread to within
-tens of microseconds (`Base.sleep(0.001)` takes about 2.5 ms on macOS). Other
-tasks keep running. On a reactor thread (an inline handler) it blocks that
-thread instead, stalling its other connections for the duration.
+Block the current task for `seconds`, with sub-millisecond accuracy.
+
+`Base.sleep` is coarse for short waits (`sleep(0.001)` takes about 2.5 ms on
+macOS). `Facil.sleep` is timed by Facil's timer thread to within tens of
+microseconds. Other tasks run meanwhile. Not exported, so that it does not
+clash with `Base.sleep`: write `Facil.sleep`.
+
+# Arguments
+- `seconds`: how long to wait. `0` or a negative number just yields to other
+  tasks.
+
+# Returns
+`nothing`.
+
+# Throws
+- `ArgumentError` if `seconds` is `NaN`.
+
+# Notes
+In an inline handler, or any callback running on the reactor thread, it blocks
+that thread: every connection on it stalls for the duration. Sleep only in
+task handlers and in `spawn = true` callbacks.
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> t = @elapsed Facil.sleep(0.05);
+
+julia> 0.05 <= t < 0.5
+true
+```
 """
 function sleep(s::Real)
     isnan(s) && throw(ArgumentError("sleep time must not be NaN"))
@@ -123,10 +150,46 @@ end
 """
     Facil.Timer(callback, delay; interval = 0)
 
-Runs `callback(timer)` on a Julia task after `delay` seconds and then every
-`interval` seconds (once if `interval` is 0), timed like [`Facil.sleep`](@ref).
-Ticks that fall behind are skipped, not queued. `close(timer)` stops it; a
-callback that throws is logged and stops the timer.
+Run `callback(timer)` on a Julia task after `delay` seconds, and then every
+`interval` seconds.
+
+# Arguments
+- `callback`: called with the `Timer` itself, so it can `close` it.
+- `delay::Real`: seconds until the first call, `>= 0`.
+
+# Keywords
+- `interval::Real = 0`: seconds between calls; `0` means call once.
+
+# Returns
+The timer. `isopen(timer)` is `true` until it has finished or been closed;
+`close(timer)` stops it (a call already running finishes).
+
+# Throws
+- `ArgumentError` if `delay` or `interval` is negative.
+
+# Notes
+- Timed like [`Facil.sleep`](@ref), by Facil's timer thread; it does not need
+  a server or the reactor.
+- The callback runs on a Julia task, never on the reactor thread, so it may
+  block. Calls of one timer never overlap.
+- Ticks are scheduled from the start time, not from the end of the previous
+  call, so the period does not drift. A tick that falls due while the previous
+  call is still running is skipped, not queued.
+- A callback that throws is logged and stops the timer.
+- Not exported (`Base.Timer` exists): write `Facil.Timer`. [`every`](@ref) is
+  the short form for a repeating timer.
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> fired = Channel{Symbol}(1);
+
+julia> t = Facil.Timer(timer -> put!(fired, :once), 0.01);
+
+julia> take!(fired)
+:once
+```
 """
 mutable struct Timer
     const waker::Waker
@@ -178,10 +241,37 @@ function Base.close(t::Timer)
 end
 
 """
-    every(f, ms) -> Facil.Timer
+    every(f, ms::Real) -> Facil.Timer
 
-Calls `f()` every `ms` milliseconds on a Julia task, starting `ms` from now,
-until `f` returns `false` or the timer is closed.
+Call `f()` every `ms` milliseconds on a Julia task, first after `ms` from now.
+
+# Arguments
+- `f`: a function of no arguments. If it returns exactly `false` the timer
+  stops; any other return value keeps it going.
+- `ms`: the period in milliseconds, `> 0`. Note the unit: [`Facil.Timer`](@ref)
+  and [`Facil.sleep`](@ref) take seconds.
+
+# Returns
+The [`Facil.Timer`](@ref); `close` it to stop.
+
+# Throws
+- `ArgumentError` if `ms` is not positive.
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> n = Threads.Atomic{Int}(0);
+
+julia> t = every(10) do
+           Threads.atomic_add!(n, 1) < 2    # the third call returns false and stops the timer
+       end;
+
+julia> while isopen(t); Facil.sleep(0.01); end
+
+julia> n[]
+3
+```
 """
 function every(f, ms::Real)
     ms > 0 || throw(ArgumentError("the interval must be positive"))

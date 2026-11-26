@@ -23,16 +23,74 @@ const _UE_SCHEME_TOO_LONG = 0x0c
 """
     InvalidUri <: HttpError
 
-A string or byte sequence could not be parsed as a URI component. `kind` is one of
-`:InvalidUriChar`, `:InvalidScheme`, `:InvalidAuthority`, `:InvalidPort`, `:InvalidFormat`,
-`:SchemeMissing`, `:AuthorityMissing`, `:PathAndQueryMissing`, `:PathDoesNotStartWithSlash`,
-`:TooLong`, `:Empty`, `:SchemeTooLong`.
+Thrown when text does not parse as a [`Uri`](@ref) or as one of its components
+([`Scheme`](@ref), [`Authority`](@ref), [`PathAndQuery`](@ref), [`Port`](@ref)).
+
+# Fields
+- `kind::Symbol`: what was wrong.
+
+| `kind` | Message | Typical cause |
+|:--|:--|:--|
+| `:InvalidUriChar` | invalid uri character | a space, control byte or other forbidden character |
+| `:InvalidScheme` | invalid scheme | a scheme with a forbidden character |
+| `:InvalidAuthority` | invalid authority | unbalanced `[` `]`, nothing after `@` |
+| `:InvalidPort` | invalid port | a port that is not a number in `0:65535` |
+| `:InvalidFormat` | invalid format | components in an impossible arrangement |
+| `:SchemeMissing` | scheme missing | authority and path without a scheme (parts) |
+| `:AuthorityMissing` | authority missing | a scheme without an authority (parts) |
+| `:PathAndQueryMissing` | path missing | a scheme without a path (parts) |
+| `:PathDoesNotStartWithSlash` | path does not start with slash | a [`PathAndQuery`](@ref) such as `"a/b"` |
+| `:TooLong` | uri too long | more than 65,534 bytes |
+| `:Empty` | empty string | empty input |
+| `:SchemeTooLong` | scheme too long | a scheme over 64 bytes |
+
+The three `...Missing` kinds only occur wrapped in an
+[`InvalidUriParts`](@ref).
+
+# Examples
+```jldoctest
+julia> Uri("/a b")
+ERROR: invalid uri character
+[...]
+
+julia> try
+           Uri("")
+       catch e
+           e.kind
+       end
+:Empty
+```
 """
 struct InvalidUri <: HttpError
     kind::Symbol
 end
 
-"An invalid combination of [`UriParts`](@ref); wraps the [`InvalidUri`](@ref) cause."
+"""
+    InvalidUriParts <: HttpError
+
+Thrown by `Uri(parts::UriParts)` and by the keyword form `Uri(; scheme,
+authority, path_and_query)` when the components given do not make a URI: a
+scheme needs both an authority and a path, and an authority with a path needs
+a scheme.
+
+# Fields
+- `err::InvalidUri`: the cause; its `kind` is `:SchemeMissing`,
+  `:AuthorityMissing` or `:PathAndQueryMissing`.
+
+# Examples
+```jldoctest
+julia> Uri(; scheme = "https")
+ERROR: authority missing
+[...]
+
+julia> try
+           Uri(; authority = "example.com", path_and_query = "/x")
+       catch e
+           e isa InvalidUriParts, e.err.kind
+       end
+(true, :SchemeMissing)
+```
+"""
 struct InvalidUriParts <: HttpError
     err::InvalidUri
 end
@@ -158,11 +216,47 @@ end
 
 """
     Scheme(src)
+    Scheme(ptr::Ptr{UInt8}, len::Integer)
     tryparse(Scheme, src)
+    parse(Scheme, src)
 
-The scheme component of a URI. `Schemes.HTTP` and `Schemes.HTTPS` are the standard
-schemes; `Scheme("ftp")` parses any other. `src` is a string, a byte vector, or a
-pointer and length; throws [`InvalidUri`](@ref). Comparison is ASCII case-insensitive.
+The scheme component of a URI, such as `http` or `https`.
+
+`Schemes.HTTP` and `Schemes.HTTPS` are constants, and parsing `"http"` or
+`"https"` in any case returns them. Any other scheme keeps its text.
+
+# Arguments
+- `src`: an `AbstractString` or `AbstractVector{UInt8}` holding the scheme alone
+  (no `://`).
+- `ptr`, `len`: a pointer to `len` bytes holding the scheme.
+
+# Returns
+A `Scheme`; `tryparse` returns `nothing` instead of throwing.
+
+# Throws
+- [`InvalidUri`](@ref) with kind `:InvalidScheme` for a character other than a
+  letter, digit, `+`, `-`, `.` or `~`, or `:SchemeTooLong` over 64 bytes.
+
+# Notes
+- Comparison (with another `Scheme` or a string) and hashing ignore ASCII case.
+- [`as_str`](@ref), `string` and `print` give the text as written; `show`
+  prints `Schemes.HTTPS` or `Scheme("ftp")`.
+- An empty string is accepted and gives an empty scheme, as in the crate.
+
+# Examples
+```jldoctest
+julia> Scheme("https")
+Schemes.HTTPS
+
+julia> Scheme("HTTP") === Schemes.HTTP
+true
+
+julia> s = Scheme("ftp")
+Scheme("ftp")
+
+julia> s == "FTP", string(s)
+(true, "ftp")
+```
 """
 struct Scheme
     tag::UInt8              # 0x00 none, 0x01 http, 0x02 https, 0x03 other
@@ -170,7 +264,18 @@ struct Scheme
     global _u_scheme(tag::UInt8, other::SubString{String}=_U_EMPTY) = new(tag, other)
 end
 
-"The standard schemes: `Schemes.HTTP`, `Schemes.HTTPS`."
+"""
+    Schemes
+
+The standard URI schemes as [`Scheme`](@ref HttpTypes.Scheme) constants: `Schemes.HTTP` and
+`Schemes.HTTPS`.
+
+# Examples
+```jldoctest
+julia> scheme(uri"https://example.com/") === Schemes.HTTPS
+true
+```
+"""
 baremodule Schemes end
 Core.eval(Schemes, :(const HTTP = $(_u_scheme(0x01))))
 Core.eval(Schemes, :(const HTTPS = $(_u_scheme(0x02))))

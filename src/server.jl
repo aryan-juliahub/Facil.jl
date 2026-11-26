@@ -43,8 +43,40 @@ const OPEN, CLOSING, CLOSED = 0, 1, 2
 """
     Server
 
-A listening HTTP server returned by [`serve!`](@ref). `close(s)` stops it,
-`wait(s)` blocks until it has stopped, `isopen(s)` and `port(s)` describe it.
+A listening HTTP server, returned by [`serve!`](@ref).
+
+A `Server` is not constructed directly. It supports:
+
+| Call | Result |
+|:--|:--|
+| [`close(server; grace = 0)`](@ref Base.close(::Server)) | stop listening and close its connections |
+| [`wait(server)`](@ref Base.wait(::Server)) | block until it has stopped |
+| [`isopen(server)`](@ref Base.isopen(::Server)) | `true` until `close` is called |
+| [`port(server)`](@ref HttpTypes.port(::Server)) | the port it listens on |
+| [`Facil.connections(server)`](@ref) | open connections |
+| [`reload!(server; cert, key)`](@ref reload!) | replace an HTTPS server's certificate |
+
+`show` prints the address and state, for example
+`Facil.Server("127.0.0.1", 8080, open)`. The states are `open`, `closing`
+(after `close`, while connections finish) and `closed`.
+
+Every server in a process shares one reactor. A process may run several
+servers, each with its own handler, limits and `inline` setting.
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> server = serve!(req -> "ok", 0);
+
+julia> isopen(server)
+true
+
+julia> close(server); wait(server)
+
+julia> isopen(server)
+false
+```
 """
 mutable struct Server{F}
     const handler::F
@@ -63,8 +95,49 @@ const ON_UPGRADE = Ref{Ptr{Cvoid}}(C_NULL)
 const ON_CLOSED = Ref{Ptr{Cvoid}}(C_NULL)
 const ON_RELEASE = Ref{Ptr{Cvoid}}(C_NULL)
 
+"""
+    isopen(server::Server) -> Bool
+
+Whether `server` is still accepting connections.
+
+Returns `true` from [`serve!`](@ref) until [`close`](@ref Base.close(::Server))
+is called on it (or the reactor stops), and `false` afterwards, including while
+its last connections are still finishing. Use [`wait`](@ref Base.wait(::Server))
+to learn when those are gone.
+"""
 Base.isopen(s::Server) = (@atomic s.state) == OPEN
+"""
+    port(server::Server) -> Int
+
+The TCP port `server` listens on.
+
+For a server started on port `0` this is the free port Facil picked, which is
+how tests find their server.
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> server = serve!(req -> "ok", 0);
+
+julia> 1024 <= port(server) <= 65535
+true
+
+julia> close(server)
+```
+"""
 HttpTypes.port(s::Server) = s.port
+"""
+    wait(server::Server)
+
+Block the calling task until `server` has stopped: it no longer listens and
+every one of its connections is closed.
+
+Returns `nothing`. Returns at once for a server that is already closed.
+[`serve`](@ref) is `serve!` followed by `wait`. Pair it with
+[`close`](@ref Base.close(::Server)) from another task, a timer or a signal;
+on its own it blocks for as long as the server runs.
+"""
 Base.wait(s::Server) = (wait(s.closed); nothing)
 
 function Base.show(io::IO, s::Server)
@@ -73,11 +146,47 @@ function Base.show(io::IO, s::Server)
 end
 
 """
-    close(s::Server)
+    close(server::Server; grace = 0)
 
-Stops accepting connections and closes the server's open connections once their
-queued output is sent. Returns at once; `wait(s)` blocks until all are gone.
-With `grace > 0` requests in progress get up to `grace` seconds to finish first.
+Stop `server`. Returns `nothing` at once; [`wait(server)`](@ref Base.wait(::Server))
+blocks until it has stopped.
+
+# Keywords
+- `grace::Real = 0`: seconds that requests in progress get to finish.
+  - `0`: stop listening and close every connection as soon as the output
+    already queued for it is sent. A handler that is still running finishes,
+    but its response is discarded.
+  - `> 0`: stop listening, let each request in progress reply (the reply
+    closes its connection), close idle connections within about 2 seconds,
+    and close whatever is left after `grace` seconds. Other servers in the
+    process are not affected.
+
+# Notes
+- Calling `close` again, or on a closed server, does nothing.
+- The reactor keeps running for the life of the process; closing a server
+  closes only its listener and its connections.
+- WebSocket connections are closed without a close frame and their
+  `on_close` runs (`on_shutdown` does not). Streamed responses and event
+  streams are cut; their `isopen(io)` turns `false`. With `grace`, such
+  long-lived connections keep the server open until `grace` runs out.
+- [`serve`](@ref) calls `close` for you on Ctrl-C at the REPL, and drains
+  with `shutdown_grace` on SIGTERM.
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> server = serve!(req -> "ok", 0);
+
+julia> close(server; grace = 5)
+
+julia> wait(server)
+
+julia> occursin("closed", string(server))
+true
+```
+
+See the [shutdown guide](@ref shutdown-guide).
 """
 function Base.close(s::Server; grace::Real = 0)
     grace > 0 && return drain_server!(s, grace)
@@ -91,6 +200,13 @@ function Base.close(s::Server; grace::Real = 0)
     nothing
 end
 
+"""
+    Facil.connections(server::Server) -> Int
+
+The number of connections `server` holds open right now: idle keep-alive
+connections, requests in progress, streams, and WebSockets upgraded on it.
+`0` for a closed server. Useful for a metrics endpoint or to watch a drain.
+"""
 connections(s::Server) = (@atomic s.state) == CLOSED ? 0 :
     Int(@ccall LIBFJL.fjl_http_connections(s.cserver::Ptr{Cvoid})::Csize_t)
 
@@ -167,43 +283,144 @@ end
 
 """
     serve!(handler, host = "127.0.0.1", port = 8080; kw...) -> Server
-    serve!(handler, port::Integer; kw...)
+    serve!(handler, port::Integer; kw...) -> Server
 
-Starts an HTTP server and returns it without blocking. `handler(req::Request{String})`
-returns a `Response` (body `String`, `Vector{UInt8}` or `nothing`) or a `String`,
-which is sent as `200 text/plain`. Port 0 picks a free port; `port(server)` tells which.
+Start an HTTP server and return it without blocking.
 
-A response body is sent without a copy and must not be changed afterwards. A
-non-empty body without a `content-type` gets `text/plain; charset=utf-8` (string)
-or `application/octet-stream` (bytes); `content-length` is always set by Facil.
-A handler that throws, or returns anything else, gives a 500; the error is logged
-to stderr once per error type every 10 seconds. A request facil.io parsed but
-HttpTypes rejects (bad target or header name) gets a 400.
+`handler` is called once per request with a [`Request`](@ref)`{String}` and
+returns the response. It is the first argument, so `do` syntax works.
 
-Keywords:
-- `inline = false`: run each handler on its own Julia task, so it may block (use
-  [`Facil.sleep`](@ref) for short waits). With one Julia thread handlers run inline
-  anyway. `inline = true` runs them on the reactor thread: faster for short
-  handlers, but one that blocks stalls every connection on that thread.
-- `reactors = 1`: reactor threads, shared by every server in the process; fixed by the first server.
-- `max_header_size = 32768`, `max_body_size = 50 MiB`: larger requests are refused (431/413).
-- `timeout = 40`: seconds an idle keep-alive connection is kept (1–255).
-- `before_body = head -> Buffer()`: called with a [`RequestHead`](@ref) when a body
-  starts; returns `Buffer()`, `Stream()`, `Spool()` or `Reject(status)`.
-- `body_in_memory = 16 MiB`: largest `Buffer()` body; larger ones get a 413.
-- `header_timeout = 30`: seconds a client has to send a request head, else 408
-  (0 disables). Process-wide: the last server started sets it.
-- `max_pending_output = 16 MiB`: a client with more unsent response bytes queued
-  that stops reading for about 3 s is disconnected (0 disables).
-- `shutdown_grace = 10`: seconds `serve` gives open requests to finish on SIGTERM.
-- `verbose = false`: log start-up, limits and rejected requests to stderr.
-- `tls = nothing`: a [`TLSConfig`](@ref) serves HTTPS instead (needs `reactors = 1`).
-- `public_folder = nothing`: a directory whose files are served (GET, HEAD,
-  OPTIONS) before the handler is called; see [`sendfile`](@ref) for the headers.
-  Requests for anything else, and other methods, reach the handler.
+# Arguments
+- `handler`: any callable `handler(req) -> result`. `result` is one of
+  - a [`Response`](@ref) whose body is a `String`, a `Vector{UInt8}` or `nothing`;
+  - a `String`, sent as `200` with `content-type: text/plain; charset=utf-8`;
+  - what [`stream`](@ref), [`sse`](@ref), [`sendfile`](@ref) or [`websocket`](@ref) returns.
+- `host::AbstractString = "127.0.0.1"`: the address to bind. `"0.0.0.0"` listens
+  on every IPv4 interface, `"::1"` and `"::"` are the IPv6 forms, and a host
+  name such as `"localhost"` is resolved.
+- `port::Integer = 8080`: `0` to `65535`. `0` picks a free port; read it back
+  with [`port(server)`](@ref HttpTypes.port(::Server)).
+
+# Keywords
+Handlers and threads (see the [handlers guide](@ref handlers-guide)):
+- `inline::Bool = false`: `false` runs the handler on a task of Facil's worker
+  pool, so it may block (wait for I/O, take a lock, call [`Facil.sleep`](@ref)).
+  `true` runs it on the reactor thread, inside the event loop: less work per
+  request, but a handler that blocks stalls every connection on that thread.
+  When Julia has one thread (`julia -t 1`) handlers always run inline.
+- `reactors::Integer = 1`: reactor threads. Process-wide: the first server
+  fixes the number and a later server asking for another throws.
+
+Limits (see [Limits](@ref limits-reference)):
+- `max_header_size::Integer = 32768`: bytes of request head; more gets a `431`. At least 1024.
+- `max_body_size::Integer = 50 MiB`: bytes of request body; more gets a `413`.
+- `body_in_memory::Integer = 16 MiB`: largest body [`Buffer`](@ref) keeps in memory; more gets a `413`.
+- `timeout::Integer = 40`: seconds an idle connection is kept open, `1` to `255`.
+- `header_timeout::Integer = 30`: seconds a client has to send a complete
+  request head. A client still trickling its head after that gets a `408` and
+  is disconnected; one that has gone silent is closed by `timeout` instead.
+  `0` turns the check off, at most `3600`. Process-wide: the last server
+  started sets it.
+- `max_pending_output::Integer = 16 MiB`: a client with more unsent response
+  bytes than this that stops reading for about 3 seconds is disconnected; `0`
+  turns the check off.
+
+Request bodies (see the [request bodies guide](@ref bodies-guide)):
+- `before_body = head -> Buffer()`: called with a [`RequestHead`](@ref) when a
+  request has a body, before the body is read. Returns [`Buffer`](@ref)`()`,
+  [`Stream`](@ref)`()`, [`Spool`](@ref)`()` or [`Reject`](@ref)`(status)`. It
+  runs on the reactor thread and must not block.
+
+Responses:
 - `compress = false`: `true` or a [`CompressOptions`](@ref) compresses handler
-  results (zstd, br, gzip by `Accept-Encoding`) on the handler's task.
-- `gc_headroom = 0`: bytes of heap headroom, see [`Facil.gc_headroom!`](@ref).
+  results (zstd, brotli or gzip, chosen from `Accept-Encoding`), on the thread
+  that ran the handler.
+- `public_folder::Union{Nothing,AbstractString} = nothing`: a directory whose
+  files are served for `GET`, `HEAD` and `OPTIONS` before the handler is
+  called; requests that match no file reach the handler. See [`sendfile`](@ref)
+  for the headers.
+
+HTTPS:
+- `tls = nothing`: a [`TLSConfig`](@ref) makes this an HTTPS server. Needs `reactors = 1`.
+
+Operation:
+- `shutdown_grace::Real = 10`: seconds [`serve`](@ref) gives requests in
+  progress when the process gets SIGTERM.
+- `verbose::Bool = false`: write one line to stderr at start-up (address,
+  threads, limits), one for each request that `before_body` rejects or that
+  is over `body_in_memory`, and one when the server starts to drain.
+- `gc_headroom::Integer = 0`: bytes of heap headroom; see [`Facil.gc_headroom!`](@ref).
+
+# Returns
+The running [`Server`](@ref). The listener is bound when `serve!` returns, so a
+client may connect at once.
+
+# Throws
+- `ArgumentError`: a keyword out of range, `port` outside `0:65535`, a NUL in
+  `host`, `public_folder` that is not a directory, `tls` that is not a
+  `TLSConfig`, `tls` with `reactors > 1`, or `reactors` different from the
+  reactor already running.
+- `SystemError`: the address could not be bound, for example
+  `Address already in use` when another process holds the port.
+- `MethodError`: an unknown keyword.
+
+# What Facil does around the handler
+- A handler that throws, or returns anything not listed above, gives a `500`
+  with the body `Internal Server Error`. The error and its stack trace are
+  written to stderr, at most once per error type every 10 seconds.
+- A request whose target or header names HttpTypes rejects gets a `400`
+  without reaching the handler. So does a request without a `Host` header.
+- `content-length` (or chunked framing) is always set by Facil; a
+  `content-length` or `transfer-encoding` you set is ignored. A non-empty body
+  without `content-type` gets `text/plain; charset=utf-8` (a `String`) or
+  `application/octet-stream` (bytes). facil.io adds `date`, `last-modified`
+  and `connection` when you did not set them.
+- A response body is sent without a copy. Do not change a `Vector{UInt8}`
+  after returning it.
+- A `HEAD` request gets the head your handler produced, without the body.
+- A client that disconnects while its handler runs is not noticed: the
+  handler finishes and its result is discarded.
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> import Downloads
+
+julia> server = serve!(0) do req
+           if path(uri(req)) == "/"
+               Response(StatusCodes.OK, "home")
+           else
+               Response(StatusCodes.NOT_FOUND, "no such page")
+           end
+       end;
+
+julia> base = "http://127.0.0.1:\$(port(server))";
+
+julia> String(take!(Downloads.download(base * "/", IOBuffer())))
+"home"
+
+julia> Downloads.request(base * "/nope").status
+404
+
+julia> close(server)
+```
+
+`serve!` with options, as a server meant for short non-blocking handlers:
+
+```jldoctest
+julia> using Facil
+
+julia> server = serve!(req -> "pong", "127.0.0.1", 0; inline = true, max_body_size = 1024, timeout = 10);
+
+julia> isopen(server)
+true
+
+julia> close(server)
+```
+
+See also [`serve`](@ref), [`Server`](@ref), and the
+[configuration reference](@ref configuration-reference).
 """
 serve!(handler, port::Integer; kw...) = serve!(handler, "127.0.0.1", port; kw...)
 
@@ -251,12 +468,36 @@ const GC_HEADROOM = Ref{Vector{UInt8}}(UInt8[])
 const GC_HEADROOM_LOCK = ReentrantLock()
 
 """
-    Facil.gc_headroom!(bytes) -> Int
+    Facil.gc_headroom!(bytes::Integer) -> Int
 
-Keeps a never-written block of `bytes` alive so the collector sizes its heap as
-if that much more were live: fewer collections when handlers allocate large
-temporaries. It costs address space, not memory. Process-wide; it only grows.
-Returns the headroom now held.
+Keep `bytes` of heap headroom so Julia's garbage collector runs less often.
+
+Facil holds a block of `bytes` that is allocated but never written. The
+collector sizes its heap from what is live, so it behaves as if that much more
+were in use: fewer collections when handlers allocate large temporaries. The
+block costs address space, not resident memory.
+
+# Arguments
+- `bytes`: the headroom wanted, `>= 0`.
+
+# Returns
+The headroom now held, in bytes. Headroom only grows: a smaller `bytes` than
+before changes nothing, and `gc_headroom!(0)` just reports the current value.
+
+# Throws
+- `ArgumentError` if `bytes` is negative.
+
+# Notes
+Process-wide. `serve!(...; gc_headroom = n)` calls this. It does not help every
+load: measure before keeping it (see the [performance guide](@ref performance-guide)).
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> Facil.gc_headroom!(0) >= 0
+true
+```
 """
 function gc_headroom!(bytes::Integer)
     bytes >= 0 || throw(ArgumentError("gc_headroom must not be negative"))
@@ -268,14 +509,45 @@ end
 
 """
     serve(handler, host = "127.0.0.1", port = 8080; kw...)
+    serve(handler, port::Integer; kw...)
 
-Like [`serve!`](@ref) but blocks until the server is closed; Ctrl-C closes it.
+Start an HTTP server and block until it is closed.
+
+Takes the arguments and keywords of [`serve!`](@ref) and throws what it throws.
+Use `serve` as the last line of a server program and `serve!` when the program
+has more to do (tests, several servers, a REPL session).
+
+# Returns
+`nothing`, once the server has stopped.
+
+# Stopping
+- At the REPL, Ctrl-C closes the server and `serve` returns.
+- SIGTERM (`kill <pid>`, `systemctl stop`, `docker stop`) drains: the server
+  stops accepting, requests in progress get up to `shutdown_grace` seconds
+  (default 10), and the process exits with status 143. Julia prints its own
+  `signal 15: Terminated` report to stderr first; that is not an error.
+- In a script (`julia server.jl`), Ctrl-C ends the process the way Julia ends
+  any script on SIGINT: Julia prints its `signal 2: Interrupt` report, then
+  the same drain runs and the process exits.
+- Under `julia -e`, or after `Base.exit_on_sigint(false)`, Ctrl-C does not
+  stop `serve`. Send SIGTERM.
+- Another task may call `close(server)`; `serve` does not hand you the server,
+  so use [`serve!`](@ref) and [`wait`](@ref Base.wait(::Server)) for that.
+
+# Examples
+A complete program. Save it as `hello.jl`, run `julia -t 4 hello.jl`, then
+open `http://127.0.0.1:8080/`:
 
 ```julia
+using Facil
+
 serve("127.0.0.1", 8080) do req
     Response(StatusCodes.OK, "hello")
 end
 ```
+
+This is `docs/examples/hello.jl`, which the documentation build starts and
+requests. See the [shutdown guide](@ref shutdown-guide) for signals.
 """
 function serve(handler, args...; kw...)
     srv = serve!(handler, args...; kw...)

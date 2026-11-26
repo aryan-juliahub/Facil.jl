@@ -1,6 +1,19 @@
 # Facil.jl
 
+[![Docs: dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://aryan-juliahub.github.io/Facil.jl/dev/)
+[![CI](https://github.com/aryan-juliahub/Facil.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/aryan-juliahub/Facil.jl/actions/workflows/CI.yml)
+
 An HTTP/1.1 server for Julia built on [facil.io](https://github.com/boazsegev/facil.io).
+You write a function from a request to a response; Facil serves it, with
+HTTPS, WebSockets, server-sent events, streaming, static files and compression.
+
+```julia
+using Facil
+
+serve("127.0.0.1", 8080) do req
+    Response(StatusCodes.OK, "hello")
+end
+```
 
 - **facil.io** (C) does the sockets, the event loop, HTTP/1.1 parsing, static files,
   WebSockets, server-sent events, pub/sub, timers and TLS.
@@ -12,342 +25,124 @@ An HTTP/1.1 server for Julia built on [facil.io](https://github.com/boazsegev/fa
 
 HTTP.jl is not a dependency.
 
+**Documentation: <https://aryan-juliahub.github.io/Facil.jl/dev/>**
+
+| If you are | Start with |
+|---|---|
+| new to Facil | [Install](https://aryan-juliahub.github.io/Facil.jl/dev/getting-started/install/), [Your first server](https://aryan-juliahub.github.io/Facil.jl/dev/getting-started/first-server/), [Tutorial: a JSON API](https://aryan-juliahub.github.io/Facil.jl/dev/getting-started/tutorial/) |
+| coming from HTTP.jl or Node.js | [Coming from HTTP.jl](https://aryan-juliahub.github.io/Facil.jl/dev/guide/from-http-jl/), [Coming from Node.js](https://aryan-juliahub.github.io/Facil.jl/dev/guide/from-node/) |
+| looking something up | [API reference](https://aryan-juliahub.github.io/Facil.jl/dev/api/), [Configuration](https://aryan-juliahub.github.io/Facil.jl/dev/reference/configuration/), [FAQ](https://aryan-juliahub.github.io/Facil.jl/dev/reference/faq/) |
+
 ## Install
 
-Facil is not registered yet, and the prebuilt library (`facil_julia_jll`) is not
-published. Until it is, installing needs a C compiler (`clang` or `gcc`) and a local
-build of the C library:
+Facil is not registered yet, and the prebuilt C library (`facil_julia_jll`) is not
+published. Until then, installing needs git, a C compiler (`clang` or `gcc`) and a
+clone. `Pkg.add(url = ...)` does not work, because Pkg cannot fetch the facil.io
+submodule.
 
 ```sh
-git clone --recurse-submodules <repository URL> Facil.jl
-cd Facil.jl
-julia --project -e 'using Pkg; Pkg.instantiate()'
-julia --project deps/build.jl
+git clone --recurse-submodules https://github.com/aryan-juliahub/Facil.jl
+julia --project=Facil.jl -e 'using Pkg; Pkg.instantiate()'
+julia --project=Facil.jl Facil.jl/deps/build.jl
+```
+
+Then, from your own project:
+
+```sh
+julia --project=. -e 'using Pkg; Pkg.develop([PackageSpec(path="../Facil.jl/lib/HttpTypes"), PackageSpec(path="../Facil.jl")])'
 ```
 
 Julia 1.10 or later on Linux or macOS; CI tests Linux x86_64 and macOS (arm64 and
 x86_64). Windows is not supported (facil.io has no Windows port): on Windows, run
 Facil inside WSL2. HttpTypes (`lib/HttpTypes`) is pure Julia and works natively on
-Windows.
+Windows. The [install page](https://aryan-juliahub.github.io/Facil.jl/dev/getting-started/install/) covers what can go wrong.
 
-## Hello world
+## Quick start
 
-```julia
-using Facil
-
-serve("127.0.0.1", 8080) do req
-    Response(StatusCodes.OK, "hello")
-end
-```
+Save the five lines at the top of this page as `hello.jl` and run them with
+more than one Julia thread:
 
 ```
-$ julia -t 4 --project hello.jl &
+$ julia -t 4 --project=. hello.jl &
 $ curl http://127.0.0.1:8080/
 hello
 ```
 
-`serve` blocks until the server is closed (Ctrl-C closes it). `serve!` takes the
-same arguments and returns a `Server` at once. A handler gets a `Request{String}`
-and returns a `Response` (body `String`, `Vector{UInt8}` or `nothing`) or a
-`String`. A handler that throws gives a 500.
+`serve` blocks until the server is stopped. `serve!` takes the same arguments
+and returns a `Server` at once (`close(server)` stops it; port `0` picks a free
+port, which is what tests want). A handler gets a `Request{String}` and returns
+a `Response` (body `String`, `Vector{UInt8}` or `nothing`) or a `String`. A
+handler that throws gives a 500.
 
-Every example below was run against the package and checked with `curl` or a
-WebSocket client. The [documentation](docs/src/index.md) has one page per topic.
+By default a handler runs on a task of Facil's worker pool, on Julia's threads,
+so it may block. `inline = true` runs handlers on the event-loop thread instead:
+faster, but a handler that blocks then stalls every connection. With one Julia
+thread, handlers always run inline. See
+[Handlers and concurrency](https://aryan-juliahub.github.io/Facil.jl/dev/guide/handlers/).
 
-## Routing
-
-There is no router. Branch on `method(req)` and `path(uri(req))`:
+There is no router; a handler branches on the method and the path:
 
 ```julia
 using Facil
 
 function app(req)
     m, p = method(req), path(uri(req))
-    if m == Methods.GET && p == "/"
-        Response(StatusCodes.OK, "home")
-    elseif m == Methods.GET && startswith(p, "/users/")
+    if p == "/"
+        m == Methods.GET || return not_allowed("GET")
+        Response(StatusCodes.OK, "home\n")
+    elseif startswith(p, "/users/")
+        m == Methods.GET || return not_allowed("GET")
         id = tryparse(Int, chopprefix(p, "/users/"))
-        id === nothing && return Response(StatusCodes.BAD_REQUEST, "bad id")
-        Response(StatusCodes.OK, "user $id")
-    elseif p == "/" || startswith(p, "/users/")
-        Response(StatusCodes.METHOD_NOT_ALLOWED, "only GET"; headers = [header.ALLOW => "GET"])
+        id === nothing && return Response(StatusCodes.BAD_REQUEST, "bad id\n")
+        Response(StatusCodes.OK, "user $id\n")
     else
-        Response(StatusCodes.NOT_FOUND, "not found")
+        Response(StatusCodes.NOT_FOUND, "not found\n")
     end
 end
+
+not_allowed(allow) = Response(StatusCodes.METHOD_NOT_ALLOWED, "method not allowed\n"; headers = [header.ALLOW => allow])
 
 serve(app, "127.0.0.1", 8080)
 ```
 
-## JSON
-
-Use any JSON package. Set `content-type` yourself; a `String` body is otherwise
-sent as `text/plain; charset=utf-8`.
-
-```julia
-using Facil, JSON
-
-const JSON_TYPE = [header.CONTENT_TYPE => "application/json"]
-
-serve("127.0.0.1", 8080) do req
-    if method(req) == Methods.POST
-        data = JSON.parse(body(req))
-        Response(StatusCodes.CREATED, JSON.json(Dict("hello" => data["name"])); headers = JSON_TYPE)
-    else
-        Response(StatusCodes.OK, JSON.json((status = "ok", path = path(uri(req)))); headers = JSON_TYPE)
-    end
-end
-```
-
-## Query parameters
-
-`query(uri(req))` is the raw query string or `nothing`. Facil does not decode it;
-`URIs.queryparams` does:
-
-```julia
-using Facil, URIs
-
-serve("127.0.0.1", 8080) do req
-    q = queryparams(something(query(uri(req)), ""))
-    name = get(q, "name", "world")
-    n = something(tryparse(Int, get(q, "n", "1")), 1)
-    Response(StatusCodes.OK, join(fill("hello $name", n), "\n"))
-end
-```
-
-## Request bodies
-
-By default the body is read into memory and `body(req)` is a `String`.
-`before_body` is called with the request head when a body starts and chooses per
-request: `Buffer()` (default), `Stream()` (read it as it arrives with
-`body_chunks(req)` or `body_stream(req)`), `Spool()` (an unlinked temporary file)
-or `Reject(status)`.
-
-```julia
-using Facil
-
-function choose(head)
-    path(uri(head)) == "/upload" && return Stream()
-    head.content_length > 1_000_000 && return Reject(413)
-    Buffer()
-end
-
-serve("127.0.0.1", 8080; before_body = choose) do req
-    if path(uri(req)) == "/upload"
-        n = 0
-        for chunk in body_chunks(req)
-            n += length(chunk)
-        end
-        Response(StatusCodes.OK, "streamed $n bytes")
-    else
-        Response(StatusCodes.OK, "buffered $(sizeof(body(req))) bytes")
-    end
-end
-```
-
-`max_body_size` (50 MiB) and `body_in_memory` (16 MiB, for `Buffer()`) give 413s.
-
-## Task handlers, inline handlers and threads
-
-By default (`inline = false`) each handler runs on its own Julia task, so it may
-block. `inline = true` runs the handler on the reactor thread: cheaper per
-request, but a handler that blocks stalls every connection. Task handlers need
-Julia started with threads (`julia -t 4`); with one thread, handlers run inline
-whatever `inline` says.
-
-```julia
-using Facil
-
-serve!("127.0.0.1", 8081; inline = true) do req
-    Response(StatusCodes.OK, "inline")
-end
-
-serve("127.0.0.1", 8080) do req
-    Facil.sleep(0.05)
-    Response(StatusCodes.OK, "task on thread $(Threads.threadid())")
-end
-```
-
-- `reactors = N` runs the reactor on `N` threads. It is fixed by the first server
-  in the process; HTTPS needs `reactors = 1`.
-- Task handlers run on worker tasks that wait in C between requests, so idle
-  workers use no CPU. Each request is still handed between threads twice, which
-  at light load costs more CPU and latency than Node. Handlers that do not block
-  should use `inline = true`, and streamed uploads `Stream(on_chunk)`; both beat
-  Node.
-
-## `Facil.sleep` and timers
-
-`Base.sleep` is coarse for short waits. `Facil.sleep(seconds)` is timed by a C
-timer thread to within tens of microseconds and lets other tasks run; use it in
-task handlers (in an inline handler it blocks the reactor). `every(f, ms)` calls
-`f()` every `ms` milliseconds until it returns `false`.
-
-```julia
-using Facil
-
-const ticks = Threads.Atomic{Int}(0)
-every(100) do
-    Threads.atomic_add!(ticks, 1)
-    true
-end
-
-serve("127.0.0.1", 8080) do req
-    Response(StatusCodes.OK, "ticks: $(ticks[])")
-end
-```
-
-## Static files
-
-`public_folder` serves a directory (GET, HEAD, OPTIONS) before the handler runs;
-`sendfile(path)` sends one file from a handler. Both set `content-type`, `etag`
-and `last-modified`, and answer conditional and range requests.
-
-```julia
-using Facil
-
-serve("127.0.0.1", 8080; public_folder = "public") do req
-    if path(uri(req)) == "/report"
-        sendfile("data/report.csv"; headers = [header.CONTENT_DISPOSITION => "attachment"])
-    else
-        Response(StatusCodes.NOT_FOUND, "no such page")
-    end
-end
-```
-
-## Streaming
-
-`stream(f, req)` returns a response whose body `f(io)` writes while it is sent.
-HTTP/1.1 clients get chunked encoding and keep the connection.
+WebSockets are accepted from the same handler:
 
 ```julia
 using Facil
 
 serve("127.0.0.1", 8080) do req
-    stream(req; headers = [header.CONTENT_TYPE => "text/plain"]) do io
-        for i in 1:5
-            write(io, "line $i\n")
-            flush(io)
-            Facil.sleep(0.1)
-        end
-    end
-end
-```
-
-## Server-sent events
-
-```julia
-using Facil
-
-serve("127.0.0.1", 8080) do req
-    path(uri(req)) == "/events" || return Response(StatusCodes.NOT_FOUND, "")
-    sse(req) do s
-        n = something(tryparse(Int, something(last_event_id(s), "0")), 0)
-        for _ in 1:3
-            n += 1
-            write_event(s; event = "tick", data = "tick $n", id = n)
-            Facil.sleep(0.2)
-        end
-    end
-end
-```
-
-## Compression
-
-`compress = true` compresses handler results with zstd, brotli or gzip, chosen
-from `Accept-Encoding`. Bodies under 1 KiB and non-text types are sent as they are.
-`CompressOptions` sets the order, levels and threshold.
-
-```julia
-using Facil
-
-const PAGE = repeat("<p>hello</p>\n", 500)
-
-serve("127.0.0.1", 8080; compress = true) do req
-    Response(StatusCodes.OK, PAGE; headers = [header.CONTENT_TYPE => "text/html"])
-end
-```
-
-## WebSockets
-
-```julia
-using Facil
-
-serve("127.0.0.1", 8080) do req
-    Facil.is_upgrade(req) || return Response(StatusCodes.NOT_FOUND, "WebSocket only")
+    Facil.is_upgrade(req) || return Response(StatusCodes.UPGRADE_REQUIRED, "WebSocket only";
+                                             headers = [header.UPGRADE => "websocket"])
     websocket(req;
               on_open = ws -> send(ws, "welcome"),
               on_message = (ws, msg) -> send(ws, msg),
-              on_close = ws -> @info "closed" ws)
+              on_close = ws -> println("client gone"))
 end
 ```
 
-Callbacks run on the reactor thread, in order, and must not block; `spawn = true`
-runs them on tasks. `send(ws, msg)` works from any thread.
+Every code block in this README is a file in [`docs/examples`](docs/examples),
+which the documentation build and the test suite start on a free port and check
+with a client.
 
-## Pub/sub
+## What is in the box
 
-`subscribe(ws, channel)` forwards a channel to a WebSocket client without running
-Julia code per message. `subscribe(f, channel)` calls `f(msg)` in this process.
-`publish(channel, msg)` works from any thread.
-
-```julia
-using Facil
-
-subscribe(msg -> @info("chat", msg), "chat")
-
-serve("127.0.0.1", 8080) do req
-    p = path(uri(req))
-    if p == "/chat" && Facil.is_upgrade(req)
-        websocket(req;
-                  on_open = ws -> subscribe(ws, "chat"),
-                  on_message = (ws, msg) -> publish("chat", msg))
-    elseif p == "/announce" && method(req) == Methods.POST
-        publish("chat", body(req))
-        Response(StatusCodes.NO_CONTENT)
-    else
-        Response(StatusCodes.NOT_FOUND, "")
-    end
-end
-```
-
-## TLS
-
-```julia
-using Facil
-
-tls = TLSConfig("cert.pem", "key.pem"; min_version = v"1.2")
-server = serve!("127.0.0.1", 8080; tls) do req
-    Response(StatusCodes.OK, "secure")
-end
-
-reload!(server; cert = "new_cert.pem", key = "new_key.pem")
-```
-
-`TLSConfig(cert, key; password, sni, min_version, max_version, ciphers,
-ciphersuites, client_ca, require_client_cert)` reads and checks the files when it
-is built. `reload!` swaps the certificate for new connections while the server
-runs. HTTPS runs on one reactor thread (`reactors = 1`); handlers can still use
-many Julia threads.
-
-## Graceful shutdown
-
-`close(server; grace = seconds)` stops accepting, lets requests in progress
-finish, and closes what is left after `grace` seconds. For `serve` in the
-foreground, SIGTERM does the same with `shutdown_grace` (default 10 s).
-
-```julia
-using Facil
-
-server = serve!("127.0.0.1", 8080) do req
-    Facil.sleep(1.0)
-    Response(StatusCodes.OK, "done")
-end
-
-Facil.Timer(_ -> close(server; grace = 5), 0.5)
-wait(server)
-println(stderr, "server closed")
-```
+| Feature | Guide |
+|---|---|
+| Task and inline handlers, reactor threads | [Handlers and concurrency](https://aryan-juliahub.github.io/Facil.jl/dev/guide/handlers/) |
+| Reading requests; query strings; limits | [Reading requests](https://aryan-juliahub.github.io/Facil.jl/dev/guide/requests/) |
+| Uploads: buffered, streamed, spooled to disk, rejected early | [Request bodies](https://aryan-juliahub.github.io/Facil.jl/dev/guide/bodies/) |
+| Responses, redirects, headers | [Sending responses](https://aryan-juliahub.github.io/Facil.jl/dev/guide/responses/) |
+| Routing without a framework; JSON | [Routing](https://aryan-juliahub.github.io/Facil.jl/dev/guide/routing/), [JSON](https://aryan-juliahub.github.io/Facil.jl/dev/guide/json/) |
+| Chunked streaming and server-sent events | [Streaming](https://aryan-juliahub.github.io/Facil.jl/dev/guide/streaming/), [SSE](https://aryan-juliahub.github.io/Facil.jl/dev/guide/sse/) |
+| Static files with ETag, ranges and `.gz` siblings | [Static files](https://aryan-juliahub.github.io/Facil.jl/dev/guide/static/) |
+| zstd, brotli and gzip compression | [Compression](https://aryan-juliahub.github.io/Facil.jl/dev/guide/compression/) |
+| WebSockets and process-local pub/sub | [WebSockets](https://aryan-juliahub.github.io/Facil.jl/dev/guide/websockets/), [Pub/sub](https://aryan-juliahub.github.io/Facil.jl/dev/guide/pubsub/) |
+| HTTPS with SNI, client certificates, live certificate reload | [HTTPS](https://aryan-juliahub.github.io/Facil.jl/dev/guide/tls/) |
+| Accurate timers and `Facil.sleep` | [Timers](https://aryan-juliahub.github.io/Facil.jl/dev/guide/timers/) |
+| Graceful shutdown on SIGTERM | [Shutdown and signals](https://aryan-juliahub.github.io/Facil.jl/dev/guide/shutdown/) |
+| Errors, logging, testing | [Errors](https://aryan-juliahub.github.io/Facil.jl/dev/guide/errors/), [Testing](https://aryan-juliahub.github.io/Facil.jl/dev/guide/testing/) |
+| systemd, containers, reverse proxies, system images | [Deployment](https://aryan-juliahub.github.io/Facil.jl/dev/guide/deployment/) |
+| Tuning and security | [Performance](https://aryan-juliahub.github.io/Facil.jl/dev/guide/performance/), [Security](https://aryan-juliahub.github.io/Facil.jl/dev/guide/security/) |
 
 ## Benchmarks
 
@@ -398,7 +193,7 @@ after the task-pool and WebSocket fixes (A1, A11, A15c, A17, A26, 1–4, 6a–6c
 17a–18b, 20, 25–27, 31). All 100 rows with min–max ranges are in
 [bench/scoreboard/chart_data.csv](bench/scoreboard/chart_data.csv) and
 [bench/scoreboard/RESULTS.md](bench/scoreboard/RESULTS.md); method and caveats in
-[docs/src/benchmarks.md](docs/src/benchmarks.md). The charts are drawn by
+[docs/src/reference/benchmarks.md](docs/src/reference/benchmarks.md). The charts are drawn by
 `python3 bench/scoreboard/chart.py`.
 
 Against HTTP.jl 2.16 there is only a measurement from the validation run, with a
@@ -409,41 +204,44 @@ prototype Facil server and `autocannon -c 100 -w 4`: empty reply 236,422 against
 
 - HTTP/1.1 only. Linux and macOS only; on Windows use WSL2 (HttpTypes alone runs
   natively on Windows).
+- Not registered yet; installing needs a clone and a C compiler.
+- No router, HTTP client, worker processes or Redis engine. HTTP.jl handlers need
+  porting to HttpTypes.
 - facil.io limits: about 8 KiB per header line and 128 headers (431 above them);
   a `Host` header is required (400 without it).
+- Status codes facil.io has no reason phrase for (418, 451 and unregistered
+  codes) are sent as 500.
 - facil.io adds `date`, `last-modified` and `connection` when absent; Facil always
   sets `content-length`.
-- One reactor per process; stopping a server takes up to about one second.
-- A client that disconnects while its handler runs is not noticed.
+- A client that disconnects while its handler runs is not noticed, and there is
+  no way to read a client's address.
 - Response bodies are sent without a copy and must not be changed afterwards.
-- HTTPS runs on one reactor thread.
+- One reactor per process; HTTPS runs on one reactor thread.
 - Task handlers need more than one Julia thread; with one, handlers run inline.
-- A full garbage collection pauses request handling on the reactor (1.2 to 1.7 ms
-  in the validation runs).
+- A garbage collection pauses request handling, the reactor included.
+- Ctrl-C stops `serve` cleanly only at the REPL; use SIGTERM for a running
+  script.
 - Approved exceptions to the "faster than Node on every row" target (2026-11-25):
-  start-up, memory and first request (rows 10, 10-sysimg, 11, 12, 12-sysimg,
-  12-json, 13, 13-sysimg, 13-json: Julia runtime cost); JSON building (19, 19a:
-  Julia's JSON library); task handlers at light load and streamed uploads through
-  a task (25, 31-p99, 31-cpu: two cross-thread hand-offs per request or chunk; use
-  `inline = true` or `Stream(on_chunk)`, which beat Node); 7-c10 and 26 (macOS
-  kernel networking limits, to recheck on Linux); GC tail latency (21a-p99,
-  21a-p999, 32, still under target with `JULIA_NUM_GC_THREADS=4`).
-- No router, HTTP client, worker processes or Redis engine. HTTP.jl handlers need
-  porting (see [docs/src/migrating_from_http_jl.md](docs/src/migrating_from_http_jl.md)).
+  start-up, memory and first request (Julia runtime cost); JSON building (Julia's
+  JSON library); task handlers at light load and streamed uploads through a task
+  (use `inline = true` or `Stream(on_chunk)`, which beat Node); two WebSocket
+  rows on macOS; GC tail latency.
 
-The full list is in [docs/src/limits.md](docs/src/limits.md).
+The full list, with what happens at each limit, is on the
+[Limits](https://aryan-juliahub.github.io/Facil.jl/dev/reference/limits/) page.
 
 ## Documentation
 
-The `docs/` folder is a Documenter.jl site:
+The site at <https://aryan-juliahub.github.io/Facil.jl/dev/> is built from `docs/` with Documenter.jl on every push to
+`main`. To build it locally:
 
 ```sh
 julia --project=docs -e 'using Pkg; Pkg.instantiate()'
-julia --project=docs docs/make.jl
+julia -t 4 --project=docs docs/make.jl
 ```
 
-It covers each feature, the Rust-to-Julia name table for HttpTypes, migrating from
-HTTP.jl, the full benchmark scoreboard and the API reference.
+The build runs every example program in `docs/examples` against a client, runs
+the doctests in the docstrings, and fails on any warning.
 
 Contributors and coding agents: start with [AGENTS.md](AGENTS.md).
 

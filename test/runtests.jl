@@ -18,4 +18,5 @@ using Test
     include("conn_scale.jl")
     include("gc.jl")
     include("names.jl")
+    include("docs_examples.jl")
 end

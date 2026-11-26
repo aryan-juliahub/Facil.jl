@@ -1,11 +1,48 @@
 """
+    Port(n::Integer)
     Port(src)
+    Port(ptr::Ptr{UInt8}, len::Integer)
     tryparse(Port, src)
+    parse(Port, src)
 
-The port of an authority: its numeric value and its textual form (`as_str`). `src` is
-an integer in `0:65535`, or a string, byte vector, or pointer and length holding an
-optional `+` and decimal digits; throws [`InvalidUri`](@ref) with kind `:InvalidPort`.
-Compares equal to other `Port`s and to integers by value; `UInt16(p)` is the number.
+The port of an authority: a number in `0:65535` together with the text it was
+written as.
+
+# Arguments
+- `n::Integer`: the port number.
+- `src`: an `AbstractString` or `AbstractVector{UInt8}` holding decimal digits,
+  optionally after a `+`; or a `Port` (returned as is).
+
+# Returns
+A `Port`; `tryparse` (which also accepts an integer) returns `nothing` instead
+of throwing.
+
+# Throws
+- [`InvalidUri`](@ref) with kind `:InvalidPort` for a number outside `0:65535`
+  or text that is not such a number.
+
+# Notes
+- `UInt16(p)` is the number. `p == 8080` compares with an integer; two ports are
+  equal when their numbers are, however they were written.
+- [`as_str`](@ref) gives the text as written (`"+80"`, `"080"`); `string` and
+  `print` give the number (`"80"`); `show` prints `Port(80)`.
+
+# Examples
+```jldoctest
+julia> p = Port(8080)
+Port(8080)
+
+julia> p == 8080, Int(UInt16(p)), string(p)
+(true, 8080, "8080")
+
+julia> q = Port("+80");
+
+julia> as_str(q), string(q)
+("+80", "80")
+
+julia> tryparse(Port, 70_000) === nothing
+true
+```
 """
 struct Port
     port::UInt16

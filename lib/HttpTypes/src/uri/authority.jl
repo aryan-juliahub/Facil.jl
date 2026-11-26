@@ -1,10 +1,47 @@
 """
     Authority(src)
+    Authority(ptr::Ptr{UInt8}, len::Integer)
     tryparse(Authority, src)
+    parse(Authority, src)
 
-The authority component of a URI: `[userinfo@]host[:port]`. `src` is a string, a byte
-vector, or a pointer and length, and must be the whole authority (no scheme, path, query
-or fragment); throws [`InvalidUri`](@ref). Comparison and hashing are ASCII case-insensitive.
+The authority component of a URI: `[userinfo@]host[:port]`.
+
+# Arguments
+- `src`: an `AbstractString` or `AbstractVector{UInt8}` holding the authority
+  and nothing else (no scheme, path, query or fragment).
+- `ptr`, `len`: a pointer to `len` bytes holding the authority.
+
+# Returns
+An `Authority`; `tryparse` returns `nothing` instead of throwing.
+[`host`](@ref), [`port`](@ref) and [`port_u16`](@ref) read its parts.
+
+# Throws
+- [`InvalidUri`](@ref): `:Empty` for empty input, `:InvalidUriChar` for a
+  forbidden character (including `/`, `?` and `#`), `:InvalidAuthority` for a
+  malformed one.
+
+# Notes
+- Comparison, ordering and hashing ignore ASCII case, since hosts are
+  case-insensitive. The text itself is kept as written.
+- The port is not validated when the authority is parsed: `"example.com:99999"`
+  is a valid authority whose [`port`](@ref) is `nothing`.
+- [`as_str`](@ref), `string` and `print` give the text; `show` prints
+  `Authority("example.com:8080")`.
+
+# Examples
+```jldoctest
+julia> a = Authority("user@Example.com:8080")
+Authority("user@Example.com:8080")
+
+julia> host(a), port(a), port_u16(a)
+("Example.com", Port(8080), 0x1f90)
+
+julia> a == "user@example.com:8080"
+true
+
+julia> tryparse(Authority, "example.com/path") === nothing
+true
+```
 """
 struct Authority
     data::SubString{String}
@@ -70,11 +107,32 @@ end
 as_str(a::Authority) = a.data
 
 """
-    host(a::Authority)
-    host(u::Uri)
+    host(a::Authority) -> SubString{String}
+    host(u::Uri) -> Union{SubString{String},Nothing}
 
-The host subcomponent: after any `userinfo@`, before any `:port`. IPv6 hosts keep
-their brackets. For a `Uri` without authority, returns `nothing`.
+The host: what follows any `userinfo@` and precedes any `:port`.
+
+# Returns
+The host as written (case is kept). An IPv6 host keeps its brackets. For a
+[`Uri`](@ref) without an authority, such as the request target `/path`,
+`nothing`.
+
+!!! note
+    A server usually receives origin-form targets (`/path?query`), whose `Uri`
+    has no host. The host the client asked for is then in the `host` header:
+    `headers(req)[header.HOST]`.
+
+# Examples
+```jldoctest
+julia> host(uri"https://user@example.com:8443/a")
+"example.com"
+
+julia> host(Authority("[::1]:8080"))
+"[::1]"
+
+julia> host(uri"/a") === nothing
+true
+```
 """
 function host end
 
@@ -102,11 +160,29 @@ function host(a::Authority)
 end
 
 """
-    port(a::Authority)
-    port(u::Uri)
+    port(a::Authority) -> Union{Port,Nothing}
+    port(u::Uri) -> Union{Port,Nothing}
 
-The [`Port`](@ref) after the last `:`, or `nothing` when absent or not a valid u16.
-For a `Uri` without authority, returns `nothing`.
+The [`Port`](@ref) written after the host.
+
+# Returns
+`nothing` when no port is written, when it is not a number in `0:65535`, or
+when a [`Uri`](@ref) has no authority. A default port is never filled in:
+`port(uri"https://example.com/")` is `nothing`, not 443.
+
+# Examples
+```jldoctest
+julia> port(uri"http://example.com:8080/")
+Port(8080)
+
+julia> port(uri"https://example.com/") === nothing
+true
+
+julia> port(uri"http://example.com:8080/") == 8080
+true
+```
+
+See also [`port_u16`](@ref).
 """
 function port end
 
@@ -124,10 +200,19 @@ function port(a::Authority)
 end
 
 """
-    port_u16(a::Authority)
-    port_u16(u::Uri)
+    port_u16(a::Authority) -> Union{UInt16,Nothing}
+    port_u16(u::Uri) -> Union{UInt16,Nothing}
 
-The port as a `UInt16`, or `nothing` when [`port`](@ref) is `nothing`.
+The port as a number, or `nothing` wherever [`port`](@ref) is `nothing`.
+
+# Examples
+```jldoctest
+julia> Int(port_u16(uri"http://example.com:8080/"))
+8080
+
+julia> port_u16(uri"/a") === nothing
+true
+```
 """
 function port_u16 end
 

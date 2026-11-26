@@ -38,7 +38,9 @@ async_done(a::Ptr{Cvoid}) = @ccall LIBFJL.fjl_async_done(a::Ptr{Cvoid})::Cint
 """
     Facil.paused_requests() -> Int
 
-Requests whose handler is running on a task (paused connections not yet resumed).
+The number of requests whose task handler is running (or waiting for a worker)
+right now, across every server. Inline handlers are never counted. A value
+that stays high means handlers are slower than requests arrive.
 """
 paused_requests() = Int(@ccall LIBFJL.fjl_async_inflight()::Csize_t)
 

@@ -1,10 +1,43 @@
 """
     PathAndQuery(src)
+    PathAndQuery(ptr::Ptr{UInt8}, len::Integer)
     tryparse(PathAndQuery, src)
+    parse(PathAndQuery, src)
 
-The path and query components of a URI (`/a/b?x=1`). `src` is a string, a byte vector,
-or a pointer and length that starts with `/` (or is `*`); throws [`InvalidUri`](@ref).
-Any fragment is dropped when parsing.
+The path and query of a URI: `/a/b?x=1`.
+
+# Arguments
+- `src`: an `AbstractString` or `AbstractVector{UInt8}` that starts with `/`, or
+  is `*`.
+- `ptr`, `len`: a pointer to `len` bytes holding the same.
+
+# Returns
+A `PathAndQuery`; `tryparse` returns `nothing` instead of throwing.
+[`path`](@ref) and [`query`](@ref) read its two halves.
+
+# Throws
+- [`InvalidUri`](@ref): `:Empty`, `:PathDoesNotStartWithSlash`,
+  `:InvalidUriChar` (space, control bytes, invalid UTF-8) or `:TooLong`.
+
+# Notes
+- A fragment (`#...`) is dropped when parsing.
+- Nothing is percent-decoded or normalised: `%20`, `..` and `//` stay as
+  written, and comparison is byte for byte.
+- [`as_str`](@ref), `string` and `print` give the text; `show` prints
+  `PathAndQuery("/a?x=1")`.
+
+# Examples
+```jldoctest
+julia> pq = PathAndQuery("/search?q=julia#top")
+PathAndQuery("/search?q=julia")
+
+julia> path(pq), query(pq)
+("/search", "q=julia")
+
+julia> PathAndQuery("search")
+ERROR: path does not start with slash
+[...]
+```
 """
 struct PathAndQuery
     data::SubString{String}
@@ -93,11 +126,30 @@ function _u_pq_parse(s::String, off::Int, n::Int)::Tuple{UInt8,PathAndQuery}
 end
 
 """
-    path(pq::PathAndQuery)
-    path(u::Uri)
+    path(pq::PathAndQuery) -> SubString{String}
+    path(u::Uri) -> SubString{String}
 
-The path, without query. An empty path reads as `"/"`, except for a `Uri` that is
-authority-only, which has path `""`.
+The path, without the query.
+
+# Returns
+The path as written: not percent-decoded and not normalised. An empty path
+reads as `"/"`, except for an authority-form [`Uri`](@ref) (`example.com:443`),
+whose path is `""`. The asterisk-form target has path `"*"`.
+
+# Examples
+```jldoctest
+julia> path(uri"/users/42?full=1")
+"/users/42"
+
+julia> path(uri"https://example.com")
+"/"
+
+julia> path(uri"/a%20b")
+"/a%20b"
+
+julia> path(Uri("example.com:443"))
+""
+```
 """
 function path end
 
@@ -111,10 +163,27 @@ function path(pq::PathAndQuery)
 end
 
 """
-    query(pq::PathAndQuery)
-    query(u::Uri)
+    query(pq::PathAndQuery) -> Union{SubString{String},Nothing}
+    query(u::Uri) -> Union{SubString{String},Nothing}
 
-The query after `?` (possibly empty), or `nothing` when there is no `?`.
+The query: what follows the first `?`.
+
+# Returns
+The raw query text, without the `?`, not split into parameters and not
+percent-decoded. `nothing` when there is no `?`; an empty string when the `?`
+is there but nothing follows it.
+
+# Examples
+```jldoctest
+julia> query(uri"/search?q=julia&page=2")
+"q=julia&page=2"
+
+julia> query(uri"/search?")
+""
+
+julia> query(uri"/search") === nothing
+true
+```
 """
 function query end
 

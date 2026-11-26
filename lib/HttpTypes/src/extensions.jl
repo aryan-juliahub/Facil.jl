@@ -3,17 +3,67 @@ export Extensions, remove!
 """
     Extensions()
 
-A type map: holds at most one value per type, keyed by `typeof(value)`.
+A type map: a collection that holds at most one value per type, keyed by the
+value's own type.
 
-    insert!(ext, val)      # returns the previous value of that type, or nothing
-    get(ext, T)            # the value of type T, or nothing
-    get(ext, T, default); ext[T]; haskey(ext, T)
-    get!(ext, T, default); get!(f, ext, T); get!(ext, T)  # T() when missing
-    remove!(ext, T)        # removes and returns the value, or nothing
-    pop!(ext, T[, default]); delete!(ext, T)
-    empty!, isempty, length, merge!(ext, other), copy
+Every [`Request`](@ref) and [`Response`](@ref) has one (`extensions(r)`). It
+carries data that belongs to a message but is not part of HTTP: a request id, an
+authenticated user, a start time. Give each kind of data its own struct type so
+that unrelated code cannot collide.
 
-`copy` copies the map, not the values. The map is allocated on first insert.
+| Call | Effect | Returns |
+|:--|:--|:--|
+| `insert!(ext, val)` | store `val` under `typeof(val)` | the value it replaced, or `nothing` |
+| `get(ext, T)` | | the value of type `T`, or `nothing` |
+| `get(ext, T, default)` | | the value, or `default` |
+| `ext[T]` | | the value; `KeyError` if absent |
+| `haskey(ext, T)` | | `Bool` |
+| `get!(ext, T, default)` | store `default` if `T` is absent | the stored value |
+| `get!(f, ext, T)` | store `f()` if `T` is absent | the stored value |
+| `get!(ext, T)` | store `T()` if `T` is absent | the stored value |
+| [`remove!`](@ref)`(ext, T)` | remove | the value, or `nothing` |
+| `pop!(ext, T)`, `pop!(ext, T, default)` | remove | the value; `KeyError` or `default` if absent |
+| `delete!(ext, T)` | remove | `ext` |
+| `empty!(ext)` | remove everything | `ext` |
+| `isempty(ext)`, `length(ext)` | | |
+| `merge!(ext, other)` | copy `other`'s values in, replacing same-typed ones | `ext` |
+| `copy(ext)` | | a new map sharing the same values |
+
+# Notes
+- The key is the exact concrete type: a value stored as `Int32` is not found by
+  `get(ext, Integer)`.
+- The values of `get!` are converted to `T`.
+- The map allocates nothing until the first insert, so an unused `Extensions`
+  is free.
+- `show` lists the stored types only, never the values.
+- Not thread-safe; do not change one map from two tasks at once.
+
+# Examples
+```jldoctest
+julia> struct RequestId
+           value::Int
+       end
+
+julia> ext = Extensions();
+
+julia> insert!(ext, RequestId(7)) === nothing
+true
+
+julia> get(ext, RequestId)
+RequestId(7)
+
+julia> insert!(ext, RequestId(8))
+RequestId(7)
+
+julia> get(ext, String) === nothing, get(ext, String, "none")
+(true, "none")
+
+julia> haskey(ext, RequestId), length(ext)
+(true, 1)
+
+julia> remove!(ext, RequestId), isempty(ext)
+(RequestId(8), true)
+```
 """
 mutable struct Extensions
     map::Union{Nothing,IdDict{DataType,Any}}
@@ -29,6 +79,28 @@ end
 struct _XMissing end
 const _X_MISSING = _XMissing()
 
+"""
+    insert!(ext::Extensions, val)
+
+Store `val`, keyed by `typeof(val)`, replacing any value of that type.
+
+# Returns
+The value that was replaced, or `nothing` if there was none.
+
+# Examples
+```jldoctest
+julia> ext = Extensions();
+
+julia> insert!(ext, 1) === nothing
+true
+
+julia> insert!(ext, 2)
+1
+
+julia> ext[Int]
+2
+```
+"""
 function Base.insert!(e::Extensions, val::T) where {T}
     m = _x_map!(e)
     old = get(m, T, _X_MISSING)
@@ -36,6 +108,25 @@ function Base.insert!(e::Extensions, val::T) where {T}
     return old === _X_MISSING ? nothing : old::T
 end
 
+"""
+    get(ext::Extensions, T::Type)
+    get(ext::Extensions, T::Type, default)
+
+The stored value of type `T`, or `default` (`nothing` when not given) if there
+is none. `ext[T]` throws a `KeyError` instead, and `haskey(ext, T)` tests for
+presence.
+
+# Examples
+```jldoctest
+julia> ext = Extensions(); insert!(ext, "trace-1");
+
+julia> get(ext, String)
+"trace-1"
+
+julia> get(ext, Int) === nothing, get(ext, Int, 0)
+(true, 0)
+```
+"""
 function Base.get(e::Extensions, ::Type{T}, default) where {T}
     m = e.map
     m === nothing && return default
@@ -52,6 +143,31 @@ end
 
 Base.haskey(e::Extensions, ::Type{T}) where {T} = e.map !== nothing && haskey(e.map, T)
 
+"""
+    get!(ext::Extensions, T::Type, default)
+    get!(f, ext::Extensions, T::Type)
+    get!(ext::Extensions, T::Type)
+
+The stored value of type `T`; if there is none, store one first: `default`,
+`f()` or `T()`, converted to `T`.
+
+# Examples
+```jldoctest
+julia> ext = Extensions();
+
+julia> push!(get!(ext, Vector{String}), "first");
+
+julia> push!(get!(ext, Vector{String}), "second");
+
+julia> ext[Vector{String}]
+2-element Vector{String}:
+ "first"
+ "second"
+
+julia> get!(ext, Int, 5), get!(ext, Int, 9)
+(5, 5)
+```
+"""
 function Base.get!(f::Base.Callable, e::Extensions, ::Type{T}) where {T}
     m = _x_map!(e)
     v = get(m, T, _X_MISSING)

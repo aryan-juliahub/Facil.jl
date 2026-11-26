@@ -1,27 +1,77 @@
 export Request, RequestParts, parts, method, uri, version, headers, extensions, body
 
 """
-    Request{T}
-
-An HTTP request: `method`, `uri`, `version`, `headers`, `extensions` and a `body` of type `T`.
-
-    Request(; method=Methods.GET, uri=Uri(), version=Versions.HTTP_11,
-              headers=HeaderMap{HeaderValue}(), extensions=Extensions(), body=nothing)
-    Request(method, uri, body=nothing; version, headers, extensions)
-    Request(body)                     # all defaults; the crate's `Request::new`
+    Request(; method = Methods.GET, uri = uri"/", version = Versions.HTTP_11,
+              headers = HeaderMap(), extensions = Extensions(), body = nothing)
+    Request(method, uri, body = nothing; version, headers, extensions)
+    Request(body)
     Request(parts::RequestParts, body)
-    Request{T}(; ...)                 # body defaults to `T()`, `""`, `zero(T)` or `nothing`
-    Request(m::HttpMethod, u::Uri, v::Version, h::HeaderMap{HeaderValue}, e::Extensions, body)
+    Request{T}(; method, uri, version, headers, extensions, body)
+    Request(method::HttpMethod, uri::Uri, version::Version, headers::HeaderMap{HeaderValue}, extensions::Extensions, body)
 
-`method` and `uri` may be strings or bytes and `headers` any iterable of `name => value`
-pairs; they are converted on construction and assignment, throwing `InvalidMethod`,
-`InvalidUri`, `InvalidUriParts`, `InvalidHeaderName` or `InvalidHeaderValue`.
-`extensions` may also be a tuple of values to insert. A `HeaderMap` or `Extensions`
-passed in is used as is, not copied. The last form converts nothing and is the cheapest.
+An HTTP request: a method, a target URI, a protocol version, headers, extensions
+and a body of type `T`.
 
-Fields are read with `method(r)`, `uri(r)`, ..., `body(r)` or `r.method`, ... and
-replaced with `r.method = "PUT"`, `r.body = ...` (converted to `T`); headers and
-extensions are changed in place. `map(f, r)` gives a request with body `f(r.body)`.
+# Arguments
+- `method`: an [`HttpMethod`](@ref), or a string or bytes to parse as one.
+- `uri`: a [`Uri`](@ref), or a string or bytes to parse as one.
+- `version`: a [`Version`](@ref).
+- `headers`: a [`HeaderMap`](@ref) (used as is, not copied) or any iterable of
+  `name => value` pairs, added in order with repeated names kept.
+- `extensions`: an [`Extensions`](@ref) (used as is) or a tuple of values to
+  insert.
+- `body`: any value; its type is the request's type parameter `T`. With
+  `Request{T}(; ...)` and no `body`, the body is `""` for `String`, `nothing`
+  for `Nothing`, `zero(T)` for numbers and `T()` otherwise.
+
+`Request(body)` takes every default (the crate's `Request::new`). The last,
+all-positional form takes values of exactly the field types, converts nothing,
+and is the cheapest.
+
+# Throws
+- [`InvalidMethod`](@ref), [`InvalidUri`](@ref), [`InvalidHeaderName`](@ref),
+  [`InvalidHeaderValue`](@ref), [`MaxSizeReached`](@ref) when an argument does
+  not convert.
+- `MethodError` for a `version` that is not a `Version`.
+
+# Reading and changing
+- Read with the accessors [`method`](@ref), [`uri`](@ref), [`version`](@ref),
+  [`headers`](@ref), [`extensions`](@ref), [`body`](@ref), or the fields of the
+  same names (`r.method`).
+- Assign a field to replace it: `r.method = "PUT"`, `r.uri = "/new"`,
+  `r.body = ...`. The value is converted like the constructor argument (the
+  body to `T`), and throws the same errors.
+- Change headers and extensions in place: `headers(r)["accept"] = "*/*"`.
+- `map(f, r)` returns a request with body `f(body(r))`; it shares the headers
+  and extensions of `r`.
+- [`parts`](@ref)`(r)` is the request without its body.
+
+`show` prints the method, URI, version, headers and body, but not the
+extensions.
+
+# Examples
+```jldoctest
+julia> req = Request(; method = "POST", uri = "/users?page=2",
+                     headers = ["Content-Type" => "application/json"], body = "{}")
+Request{String}(method=Methods.POST, uri=uri"/users?page=2", version=Versions.HTTP_11, headers=HeaderMap(hn"content-type" => hv"application/json"), body="{}")
+
+julia> method(req), path(uri(req)), body(req)
+(Methods.POST, "/users", "{}")
+
+julia> headers(req)[header.CONTENT_TYPE]
+hv"application/json"
+
+julia> req.method = "PUT"; append!(headers(req), "x-trace", "abc");
+
+julia> method(req), length(headers(req))
+(Methods.PUT, 2)
+
+julia> body(map(length, req))
+2
+
+julia> Request(Methods.GET, "/health")
+Request{Nothing}(method=Methods.GET, uri=uri"/health", version=Versions.HTTP_11, headers=HeaderMap(), body=nothing)
+```
 """
 mutable struct Request{T}
     method::HttpMethod
@@ -33,11 +83,27 @@ mutable struct Request{T}
 end
 
 """
-    RequestParts(; method, uri, version, headers, extensions)
-    parts(r::Request)
+    RequestParts(; method = Methods.GET, uri = uri"/", version = Versions.HTTP_11,
+                   headers = HeaderMap(), extensions = Extensions())
 
-A request without its body (the crate's `request::Parts`). `parts(r)` shares `r`'s
-headers and extensions; `Request(parts, body)` puts a body back.
+The head of a request, without a body (the crate's `request::Parts`).
+
+It has the fields `method`, `uri`, `version`, `headers` and `extensions`, with
+the same conversions, accessors and assignment rules as [`Request`](@ref).
+[`parts`](@ref)`(req)` takes the head off a request and `Request(parts, body)`
+puts a body on one; use the pair to swap a request's body for one of another
+type while keeping everything else.
+
+# Examples
+```jldoctest
+julia> req = Request(; method = "POST", uri = "/upload", body = "raw text");
+
+julia> p = parts(req)
+RequestParts(method=Methods.POST, uri=uri"/upload", version=Versions.HTTP_11, headers=HeaderMap())
+
+julia> body(Request(p, codeunits(body(req)))) isa AbstractVector{UInt8}
+true
+```
 """
 mutable struct RequestParts
     method::HttpMethod
@@ -88,7 +154,26 @@ RequestParts(; method=Methods.GET, uri=_U_DEFAULT, version=Versions.HTTP_11,
     parts(r::Request) -> RequestParts
     parts(r::Response) -> ResponseParts
 
-The head of a request or response without its body; it shares headers and extensions.
+The head of a request or response, without its body.
+
+The result shares its headers and extensions with `r`: changing them through
+either changes both. The other fields are copies, so assigning
+`parts(r).method = ...` does not change `r`. `Request(parts, body)` and
+`Response(parts, body)` build a message from a head and a body.
+
+# Examples
+```jldoctest
+julia> res = Response(StatusCodes.OK, "hello"; headers = ["content-type" => "text/plain"]);
+
+julia> p = parts(res)
+ResponseParts(status=StatusCodes.OK, version=Versions.HTTP_11, headers=HeaderMap(hn"content-type" => hv"text/plain"))
+
+julia> headers(p) === headers(res)
+true
+
+julia> body(Response(p, 5))
+5
+```
 """
 function parts end
 parts(r::Request) = RequestParts(r.method, r.uri, r.version, r.headers, r.extensions)
@@ -103,17 +188,106 @@ end
 Base.setproperty!(r::Request, f::Symbol, v) = _r_setfield!(r, f, v)
 Base.setproperty!(p::RequestParts, f::Symbol, v) = _r_setfield!(p, f, v)
 
-"`method(r)` is the [`HttpMethod`](@ref) of a `Request` or `RequestParts`."
+"""
+    method(r::Union{Request,RequestParts}) -> HttpMethod
+
+The request method. Compare it with a constant (`method(req) == Methods.POST`)
+or with a string (`method(req) == "POST"`). Same as `r.method`.
+
+# Examples
+```jldoctest
+julia> method(Request(; method = "DELETE", uri = "/users/1"))
+Methods.DELETE
+```
+"""
 method(r::Union{Request,RequestParts}) = r.method
-"`uri(r)` is the [`Uri`](@ref) of a `Request` or `RequestParts`."
+"""
+    uri(r::Union{Request,RequestParts}) -> Uri
+
+The request target as a [`Uri`](@ref). Same as `r.uri`. Read it further with
+[`path`](@ref), [`query`](@ref), [`host`](@ref) and the other `Uri` accessors.
+
+# Examples
+```jldoctest
+julia> req = Request(Methods.GET, "/users/42?full=1");
+
+julia> uri(req)
+uri"/users/42?full=1"
+
+julia> path(uri(req)), query(uri(req))
+("/users/42", "full=1")
+```
+"""
 uri(r::Union{Request,RequestParts}) = r.uri
-"`version(r)` is the protocol [`Version`](@ref) of a `Request`, `Response` or their parts."
+"""
+    version(r) -> Version
+
+The protocol [`Version`](@ref) of a [`Request`](@ref), [`Response`](@ref),
+[`RequestParts`](@ref) or [`ResponseParts`](@ref). Same as `r.version`.
+
+# Examples
+```jldoctest
+julia> version(Request())
+Versions.HTTP_11
+```
+"""
 function version end
-"`headers(r)` is the `HeaderMap` of a `Request`, `Response` or their parts; change it in place."
+"""
+    headers(r) -> HeaderMap{HeaderValue}
+
+The [`HeaderMap`](@ref) of a [`Request`](@ref), [`Response`](@ref),
+[`RequestParts`](@ref) or [`ResponseParts`](@ref). Same as `r.headers`.
+
+The map itself is returned, not a copy: change it in place to change the
+message's headers.
+
+# Examples
+```jldoctest
+julia> res = Response(StatusCodes.OK, "hi");
+
+julia> headers(res)[header.CONTENT_TYPE] = "text/plain";
+
+julia> get(headers(res), "content-type", nothing)
+hv"text/plain"
+```
+"""
 function headers end
-"`extensions(r)` is the [`Extensions`](@ref) of a `Request`, `Response` or their parts; change it in place."
+"""
+    extensions(r) -> Extensions
+
+The [`Extensions`](@ref) of a [`Request`](@ref), [`Response`](@ref),
+[`RequestParts`](@ref) or [`ResponseParts`](@ref). Same as `r.extensions`.
+
+The map itself is returned, not a copy: insert into it to attach data to the
+message.
+
+# Examples
+```jldoctest
+julia> req = Request();
+
+julia> insert!(extensions(req), "user-7");
+
+julia> get(extensions(req), String)
+"user-7"
+```
+"""
 function extensions end
-"`body(r)` is the body of a `Request` or `Response` (the crate's `body` and `into_body`)."
+"""
+    body(r::Union{Request,Response})
+
+The body of a [`Request`](@ref) or [`Response`](@ref): a value of the message's
+type parameter (`String` for a `Request{String}`). Same as `r.body`. It covers
+both the crate's `body()` and `into_body()`.
+
+# Examples
+```jldoctest
+julia> body(Request(; body = "payload"))
+"payload"
+
+julia> body(Response(StatusCodes.NO_CONTENT)) === nothing
+true
+```
+"""
 function body end
 
 version(r::Union{Request,RequestParts}) = r.version

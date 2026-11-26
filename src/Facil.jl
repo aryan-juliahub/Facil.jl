@@ -1,10 +1,32 @@
 """
     Facil
 
-An HTTP/1.1 server built on facil.io: [`serve`](@ref) and [`serve!`](@ref) run a
-handler that takes an HttpTypes `Request` and returns a `Response`. Also
-WebSockets, server-sent events, streaming, static files, pub/sub, timers and TLS.
-Re-exports HttpTypes.
+An HTTP/1.1 server for Julia built on [facil.io](https://github.com/boazsegev/facil.io).
+
+[`serve`](@ref) and [`serve!`](@ref) run a handler: a function that takes an
+HttpTypes [`Request`](@ref) and returns a [`Response`](@ref). The same handler
+can answer with a streamed response ([`stream`](@ref)), an event stream
+([`sse`](@ref)), a file ([`sendfile`](@ref)) or a WebSocket
+([`websocket`](@ref)). Facil also has pub/sub ([`publish`](@ref)), timers
+([`every`](@ref)) and HTTPS ([`TLSConfig`](@ref)).
+
+Facil re-exports every name of HttpTypes, so `using Facil` is all a server needs.
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> import Downloads
+
+julia> server = serve!(0) do req
+           Response(StatusCodes.OK, "hello")
+       end;
+
+julia> String(take!(Downloads.download("http://127.0.0.1:\$(port(server))/", IOBuffer())))
+"hello"
+
+julia> close(server)
+```
 """
 module Facil
 

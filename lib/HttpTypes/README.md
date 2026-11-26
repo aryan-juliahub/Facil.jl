@@ -8,10 +8,22 @@ Linux, macOS and Windows.
 
 ## Install
 
+HttpTypes is not registered yet. It lives in `lib/HttpTypes` of the
+[Facil.jl](https://github.com/aryan-juliahub/Facil.jl) repository:
+
 ```julia
 using Pkg
-Pkg.develop(path = "lib/HttpTypes")   # from the Facil.jl checkout
+Pkg.develop(path = "lib/HttpTypes")   # from a Facil.jl checkout
 ```
+
+Facil re-exports every HttpTypes name, so `using Facil` is enough when you use
+the server.
+
+## Documentation
+
+The full reference, with every type, function, error and constant, is at
+<https://aryan-juliahub.github.io/Facil.jl/dev/api/httptypes/>. Every docstring
+has a runnable example (`?HeaderMap` in the REPL shows the same text).
 
 ## Example
 
@@ -22,7 +34,7 @@ req = Request(; method = "POST", uri = "https://example.com/users?page=2",
               headers = ["Content-Type" => "application/json", "Accept" => "*/*"],
               body = """{"name":"ada"}""")
 
-method(req) === Methods.POST          # true
+method(req) == Methods.POST           # true
 host(uri(req)), query(uri(req))       # ("example.com", "page=2")
 headers(req)[header.CONTENT_TYPE]     # hv"application/json"
 
@@ -33,15 +45,25 @@ insert!(extensions(req), UInt32(42))  # typed side-channel data
 res = Response(StatusCodes.CREATED, "ok"; headers = [header.LOCATION => "/users/7"])
 status(res)                           # StatusCodes.CREATED
 string(status(res))                   # "201 Created"
-Response(StatusCodes.NOT_FOUND)       # status 404, body nothing; Response(404) throws
+Response(StatusCodes.NOT_FOUND)       # status 404, body nothing
+Response(404, "not found")            # an integer status works next to a body
 lens = map(length, res)               # Response{Int} with body 2
 
 tryparse(HttpMethod, "G T")           # nothing
-Request(; method = "G T")             # throws InvalidMethod
+# Request(; method = "G T")           # throws InvalidMethod
+# Response(404)                       # throws ArgumentError: status or body?
 ```
 
-`show` (the REPL and containers) prints Julia that reads back: `Methods.GET`, `StatusCodes.NOT_FOUND`,
-`hn"accept"`, `hv"text/plain"`, `uri"/a?b"`, `Port(8080)`; `print` and `string` give the plain HTTP text.
+Rules that hold across the package:
+
+- Constructors validate and throw a subtype of `HttpError`; `tryparse(T, src)`
+  returns `nothing` instead.
+- Strings convert wherever a typed value is expected (`req.method = "PUT"`,
+  `headers[name] = "value"`).
+- `show` (the REPL and containers) prints Julia that reads back: `Methods.GET`,
+  `StatusCodes.NOT_FOUND`, `hn"accept"`, `hv"text/plain"`, `uri"/a?b"`,
+  `Port(8080)`. `print` and `string` give the plain HTTP text.
+- Paths and queries are kept as received: nothing is percent-decoded or split.
 
 ## Rust to Julia
 

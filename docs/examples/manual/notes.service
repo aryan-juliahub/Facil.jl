@@ -1,0 +1,31 @@
+[Unit]
+Description=Notes API (Facil)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=notes
+WorkingDirectory=/srv/notes
+Environment=HOST=127.0.0.1 PORT=8080
+Environment=JULIA_NUM_THREADS=4 JULIA_NUM_GC_THREADS=4
+ExecStart=/usr/local/bin/julia --project=/srv/notes /srv/notes/server.jl
+
+# SIGTERM makes `serve` drain; give it longer than shutdown_grace.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+# 143 is how a process that drained after SIGTERM exits.
+SuccessExitStatus=143
+Restart=on-failure
+RestartSec=2
+
+# One file descriptor per connection.
+LimitNOFILE=65536
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/srv/notes/data
+
+[Install]
+WantedBy=multi-user.target

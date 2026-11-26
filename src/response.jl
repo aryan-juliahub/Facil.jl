@@ -36,7 +36,9 @@ end
 """
     Facil.pinned_bodies() -> Int
 
-Number of response bodies still held for facil.io (sent, or being sent, without a copy).
+The number of response bodies Facil is holding for facil.io because they are
+being sent without a copy. It returns to `0` when every response has been
+written to its socket; a value that keeps growing means clients are not reading.
 """
 pinned_bodies() = (lock(PIN_LOCK); n = length(PINNED); unlock(PIN_LOCK); n)
 

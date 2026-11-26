@@ -34,11 +34,13 @@ force_close(@nospecialize(s::Server)) =
     end
 
 """
-    Facil.drain_server!(s::Server, grace)
+    Facil.drain_server!(server::Server, grace::Real)
 
-What `close(s; grace)` does for `grace > 0`: stops accepting, lets requests in progress finish (each reply then
-closes its connection), closes idle connections, and after `grace` seconds closes
-whatever is left. Returns at once; `wait(s)` blocks until the server is closed.
+What [`close(server; grace)`](@ref Base.close(::Server)) does for `grace > 0`:
+stop accepting, let each request in progress reply (the reply closes its
+connection), close idle connections within about 2 seconds, and after `grace`
+seconds close whatever is left. Returns at once; `wait(server)` blocks until the server is closed.
+Prefer `close(server; grace)`.
 """
 function drain_server!(@nospecialize(s::Server), grace::Real)
     _, ok = @atomicreplace s.state OPEN => CLOSING

@@ -1,29 +1,100 @@
 export HeaderValue, InvalidHeaderValue, ToStrError, to_str, is_sensitive, set_sensitive, @hv_str
 
 """
-    InvalidHeaderValue
+    InvalidHeaderValue <: HttpError
 
-Thrown when bytes are not a valid header field value.
+Thrown by [`HeaderValue`](@ref), and by every [`HeaderMap`](@ref) function that
+converts a value, when the source holds a forbidden byte: a control byte other
+than tab, DEL, or (for a string source) any non-ASCII byte. Line breaks are
+control bytes, so a value can never span lines. The message is
+`failed to parse header value`.
+
+# Examples
+```jldoctest
+julia> HeaderValue("café")
+ERROR: failed to parse header value
+[...]
+```
 """
 struct InvalidHeaderValue <: HttpError end
 Base.showerror(io::IO, ::InvalidHeaderValue) = print(io, "failed to parse header value")
 
 """
-    ToStrError
+    ToStrError <: HttpError
 
-Thrown by `to_str` when a header value holds bytes outside visible ASCII.
+Thrown by [`to_str`](@ref) when a [`HeaderValue`](@ref) holds a byte outside
+visible ASCII (and tab). The message is `failed to convert header to a str`.
+
+# Examples
+```jldoctest
+julia> to_str(HeaderValue(UInt8[0xff]))
+ERROR: failed to convert header to a str
+[...]
+```
 """
 struct ToStrError <: HttpError end
 Base.showerror(io::IO, ::ToStrError) = print(io, "failed to convert header to a str")
 
 """
     HeaderValue(src)
+    HeaderValue(ptr::Ptr{UInt8}, len::Integer)
+    HeaderValue(n::Integer)
+    HeaderValue(name::HeaderName)
     tryparse(HeaderValue, src)
+    parse(HeaderValue, src)
 
-A header field value. A string source must be visible ASCII (plus tab); a byte
-source (vector, or pointer and length) may also carry opaque bytes 0x80:0xff.
-Control bytes and DEL are rejected. `HeaderValue(n)` formats an integer and
-`HeaderValue(name)` copies a `HeaderName`.
+A header field value.
+
+# Arguments
+- `src`: the value.
+  - An `AbstractString` must be visible ASCII (`0x20:0x7e`) or tab.
+  - An `AbstractVector{UInt8}` (or `ptr`, `len`) may also hold the opaque bytes
+    `0x80:0xff`, so values in other encodings can be carried through.
+  - A `HeaderValue` is returned as is.
+- `n::Integer`: formatted in decimal. Accepted types are `Int16`, `UInt16`,
+  `Int32`, `UInt32`, `Int64` and `UInt64`; other integer types are a `MethodError`.
+- `name::HeaderName`: the name's text becomes the value (useful for headers such
+  as `vary` and `access-control-allow-headers`).
+
+# Returns
+A `HeaderValue`. `tryparse` returns `nothing` instead of throwing. The empty
+string is a valid value.
+
+# Throws
+- [`InvalidHeaderValue`](@ref) for control bytes (including CR and LF) and DEL,
+  and for non-ASCII bytes in a string source.
+
+# Notes
+- `v == "text/plain"` compares with a string and `v == bytes` with a byte vector.
+  Values order (`isless`) by their bytes. `hash(v)` differs from the hash of the
+  equal string.
+- [`as_str`](@ref), `String(v)`, `string(v)` and `print` give the bytes without
+  checking them; [`to_str`](@ref) throws unless they are visible ASCII.
+- `length(v)` and `sizeof(v)` are the number of bytes; `codeunits(v)` views them.
+- `show` prints the literal `hv"text/plain"`, a constructor call for values the
+  literal cannot express, and `HeaderValue(<sensitive>)` for a value marked with
+  [`set_sensitive`](@ref).
+- `convert(HeaderValue, x)` accepts everything the constructor does, so header
+  collections take plain strings and integers.
+
+# Examples
+```jldoctest
+julia> HeaderValue("text/plain")
+hv"text/plain"
+
+julia> HeaderValue(1024)
+hv"1024"
+
+julia> HeaderValue(header.ACCEPT_ENCODING)
+hv"accept-encoding"
+
+julia> v = HeaderValue(UInt8[0x63, 0x61, 0x66, 0xe9]);
+
+julia> length(v), tryparse(HeaderValue, "line\\nbreak") === nothing
+(4, true)
+```
+
+See also [`hv"..."`](@ref @hv_str), [`is_sensitive`](@ref).
 """
 struct HeaderValue
     data::String
@@ -82,33 +153,71 @@ Base.parse(::Type{HeaderValue}, src::Union{AbstractString,AbstractVector{UInt8}}
 Base.convert(::Type{HeaderValue},
     src::Union{AbstractString,AbstractVector{UInt8},HeaderName,_H_INT_VALUE}) = HeaderValue(src)
 
-"""
-    from_static(HeaderValue, s)
-
-A `HeaderValue` from a visible-ASCII literal. Prefer `hv"..."`, which checks it
-when the code is parsed.
-"""
 from_static(::Type{HeaderValue}, src::String) = HeaderValue(src)
 
-"`hv\"text/plain\"` is a `HeaderValue` validated when the code is parsed."
+"""
+    hv"value"
+
+A [`HeaderValue`](@ref) literal, checked when the code is parsed.
+
+The text must be visible ASCII (tabs allowed); anything else is an error at
+macro expansion ([`InvalidHeaderValue`](@ref)), before the program runs.
+
+# Examples
+```jldoctest
+julia> hv"application/json"
+hv"application/json"
+
+julia> hv"application/json" == "application/json"
+true
+```
+"""
 macro hv_str(s)
     return from_static(HeaderValue, s)
 end
 
 """
-    HttpTypes.unchecked(HeaderValue, p, n)
-    HttpTypes.unchecked(HeaderValue, s::String)
+    HttpTypes.unchecked(HeaderValue, ptr::Ptr{UInt8}, len::Integer) -> HeaderValue
+    HttpTypes.unchecked(HeaderValue, s::String) -> HeaderValue
 
-A `HeaderValue` holding these bytes without validating them. For bytes a parser
-has already checked.
+A [`HeaderValue`](@ref) holding these bytes without validating them.
+Not exported.
+
+For bytes that an HTTP parser has already checked. Passing bytes that
+`HeaderValue(src)` would reject (CR, LF, other control bytes) produces a value
+that can corrupt the message it is written into, so never use it on input that
+has not been validated. The pointer form copies the bytes; the `String` form
+shares the string.
+
+# Examples
+```jldoctest
+julia> HttpTypes.unchecked(HeaderValue, "text/plain") == hv"text/plain"
+true
+```
 """
 unchecked(::Type{HeaderValue}, p::Ptr{UInt8}, n::Integer) = _h_value_unchecked(unsafe_string(p, n))
 unchecked(::Type{HeaderValue}, s::String) = _h_value_unchecked(s)
 
 """
-    to_str(v::HeaderValue)
+    to_str(v::HeaderValue) -> String
 
-The value as a `String`; throws `ToStrError` unless it is all visible ASCII.
+The value as a `String`, after checking that every byte is visible ASCII or tab.
+
+Use it when the text will be parsed or shown; use [`as_str`](@ref) when the raw
+bytes are wanted. No copy is made.
+
+# Throws
+- [`ToStrError`](@ref) if the value holds an opaque byte (`0x80:0xff`).
+
+# Examples
+```jldoctest
+julia> to_str(hv"text/plain")
+"text/plain"
+
+julia> to_str(HeaderValue(UInt8[0x63, 0x61, 0x66, 0xe9]))
+ERROR: failed to convert header to a str
+[...]
+```
 """
 function to_str(v::HeaderValue)
     s = getfield(v, :data)
@@ -118,17 +227,67 @@ function to_str(v::HeaderValue)
 end
 
 """
-    as_str(v::HeaderValue)
-    String(v::HeaderValue)
+    as_str(v::HeaderValue) -> String
+    String(v::HeaderValue) -> String
 
-The value's bytes as a `String`, unchecked (opaque bytes 0x80:0xff included). See `to_str`.
+The value's bytes as a `String`, without checking them and without a copy.
+
+A value built from bytes may hold opaque bytes (`0x80:0xff`), so the result is
+not always valid UTF-8. [`to_str`](@ref) is the checked form.
+
+# Examples
+```jldoctest
+julia> as_str(hv"gzip, br")
+"gzip, br"
+
+julia> isvalid(as_str(HeaderValue(UInt8[0x63, 0x61, 0x66, 0xe9])))
+false
+```
 """
 as_str(v::HeaderValue) = getfield(v, :data)
 Base.String(v::HeaderValue) = getfield(v, :data)
 
-"Whether the value is marked sensitive (its bytes are never shown, and it is kept out of HPACK tables)."
+"""
+    is_sensitive(v::HeaderValue) -> Bool
+
+Whether the value is marked sensitive with [`set_sensitive`](@ref). A new value
+is not sensitive.
+
+# Examples
+```jldoctest
+julia> is_sensitive(hv"secret"), is_sensitive(set_sensitive(hv"secret", true))
+(false, true)
+```
+"""
 is_sensitive(v::HeaderValue) = getfield(v, :sensitive)
-"`set_sensitive(v, flag)` is `v` with the sensitive mark set to `flag`."
+"""
+    set_sensitive(v::HeaderValue, flag::Bool) -> HeaderValue
+
+A copy of `v` with the sensitive mark set to `flag`. `v` itself is not changed
+(header values are immutable), so store the result.
+
+The mark is a hint for whoever handles the value: `show` and `repr` print
+`HeaderValue(<sensitive>)` instead of the bytes, so the value stays out of logs
+that print a request, a response or a header map, and an HTTP/2 encoder should
+keep it out of its compression table.
+
+!!! warning
+    Only `show` hides the bytes. `print`, `string`, `String`, [`as_str`](@ref)
+    and [`to_str`](@ref) still return them. The mark does not take part in `==`
+    or `hash`.
+
+# Examples
+```jldoctest
+julia> token = set_sensitive(HeaderValue("Bearer abc123"), true)
+HeaderValue(<sensitive>)
+
+julia> HeaderMap(header.AUTHORIZATION => token)
+HeaderMap(hn"authorization" => HeaderValue(<sensitive>))
+
+julia> as_str(token)
+"Bearer abc123"
+```
+"""
 set_sensitive(v::HeaderValue, flag::Bool) = _h_value_unchecked(getfield(v, :data), flag)
 
 Base.codeunits(v::HeaderValue) = codeunits(getfield(v, :data))

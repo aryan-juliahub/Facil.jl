@@ -58,12 +58,16 @@ First version. Nothing has been released or registered yet.
 
 ### C library
 
-- facil.io pinned at `51287473` with 18 patches (`deps/patches`): temp-file
+- facil.io pinned at `51287473` with 19 patches (`deps/patches`): temp-file
   cleanup, exact timers, gather-write send path, close races, TLS layer,
   HTTP robustness, file-descriptor capacity, request bodies, WebSocket fixes and
   controls, TLS write buffer, WebSocket performance, kqueue re-arm batching,
   epoll uuid events, a shared HTTP/1.1 read buffer, close-marker race, reactor
-  thread wake-up, and per-thread kqueues.
+  thread wake-up, per-thread kqueues, and the slow-reader guard for writes that
+  would block.
+- Patch 19 (`slow-reader-would-block`): a client that never reads is also
+  dropped when a write takes nothing at all, which is what happens on Linux
+  loopback.
 - Patch 18 (`kqueue-per-thread`): with more than one reactor thread on macOS,
   each thread owns a kqueue and closes only its own descriptors. This fixes a
   `close()` that could hang in the kernel forever (an unkillable process).
@@ -74,16 +78,18 @@ First version. Nothing has been released or registered yet.
 ### Benchmarks and docs
 
 - `bench/scoreboard`: the Node.js comparison (Node `http`/`https`/`cluster`,
-  uWebSockets.js, `ws`); see `docs/src/benchmarks.md`. Rows with an approved
+  uWebSockets.js, `ws`); see `docs/src/reference/benchmarks.md`. Rows with an approved
   exception carry an `exception` reason in `rows.json` and read EXCEPTION, not
   FAIL. Facil servers start with `JULIA_NUM_GC_THREADS=4` by default
   (`--facil-env` overrides it). Row A15c uses 6 client workers.
-- README and a Documenter.jl site in `docs/`.
+- README and a Documenter.jl site in `docs/`, published at
+  <https://aryan-juliahub.github.io/Facil.jl/dev/>: getting started and a
+  tutorial, task guides, an API reference generated from the docstrings, and
+  reference pages. Every example is run by the docs build (`docs/examples`).
 
 ### Known problems
 
-- Not tested on Linux.
 - Approved exceptions to the "faster than Node" target: start-up, memory and
   first request (10–13 and variants), JSON building (19, 19a), task handlers at
   light load and uploads through a task (25, 31-p99, 31-cpu), macOS networking
-  (7-c10, 26), GC tails (21a-p99, 21a-p999, 32). See `docs/src/limits.md`.
+  (7-c10, 26), GC tails (21a-p99, 21a-p999, 32). See `docs/src/reference/limits.md`.

@@ -72,7 +72,23 @@ end
 """
     Facil.gzip(data; level = 6) -> Vector{UInt8}
 
-gzip (RFC 1952) through libdeflate, levels 1–12.
+Compress `data` (a `String` or byte vector) as one gzip member (RFC 1952) with
+libdeflate. `level` is 1 (fastest) to 12 (smallest). This is what
+`compress = true` uses for whole bodies; call it yourself to precompress a
+response you cache.
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> z = Facil.gzip("hello "^1000);
+
+julia> length(z) < 100
+true
+
+julia> z[1:2] == [0x1f, 0x8b]
+true
+```
 """
 function gzip(data; level::Integer = DEFAULT_LEVELS.gzip)
     lv = Int(level)
@@ -91,7 +107,16 @@ end
 """
     Facil.zstd(data; level = 3) -> Vector{UInt8}
 
-One zstd frame (RFC 8878).
+Compress `data` (a `String` or byte vector) as one Zstandard frame (RFC 8878).
+`level` is -7 to 22; higher is smaller and slower.
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> length(Facil.zstd("hello "^1000)) < 100
+true
+```
 """
 function zstd(data; level::Integer = DEFAULT_LEVELS.zstd)
     c = zstd_take()
@@ -110,7 +135,16 @@ end
 """
     Facil.brotli(data; level = 4) -> Vector{UInt8}
 
-Brotli (RFC 7932), quality 0–11, window 2²².
+Compress `data` (a `String` or byte vector) with Brotli (RFC 7932). `level` is
+the quality, 0 to 11; the window is 4 MiB (2²² bytes).
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> length(Facil.brotli("hello "^1000)) < 100
+true
+```
 """
 function brotli(data; level::Integer = DEFAULT_LEVELS.br)
     bound = Int(@ccall libbrotlienc.BrotliEncoderMaxCompressedSize(sizeof(data)::Csize_t)::Csize_t)
@@ -412,11 +446,60 @@ stream_encoder(enc::Symbol, level::Int) =
     CompressOptions(; prefer = (:zstd, :br, :gzip), gzip = 6, br = 4, zstd = 3,
                     min_size = 1024, compressible = Facil.compressible_type)
 
-The `compress` keyword of [`serve!`](@ref). Among the encodings the client
-accepts (`Accept-Encoding`, q-values honoured) the one listed first in `prefer`
-wins. Bodies under `min_size` bytes, responses that already have a
-`content-encoding`, `cache-control: no-transform` and content types for which
-`compressible(type)` is false are sent as they are.
+How a server compresses responses. Pass it as the `compress` keyword of
+[`serve!`](@ref); `compress = true` is `CompressOptions()`.
+
+# Keywords
+- `prefer`: the encodings the server offers, most wanted first, from `:zstd`,
+  `:br` and `:gzip`. Among the encodings the client accepts with the highest
+  q-value in `Accept-Encoding`, the one listed first here is used. Leave one
+  out to never use it.
+- `gzip::Integer = 6` (1 to 12), `br::Integer = 4` (0 to 11),
+  `zstd::Integer = 3` (-7 to 22): the level for each encoding.
+- `min_size::Integer = 1024`: whole bodies smaller than this many bytes are
+  sent as they are.
+- `compressible = Facil.compressible_type`: a function
+  `content_type::String -> Bool` that says which content types to compress;
+  see [`Facil.compressible_type`](@ref).
+
+# Throws
+- `ArgumentError` for an unknown encoding in `prefer`, a level out of range or
+  a negative `min_size`.
+
+# What is and is not compressed
+A response is sent as it is when any of these holds: the client sent no
+`Accept-Encoding` or accepts none of `prefer`; the body is under `min_size`;
+the response already has a `content-encoding`; it has
+`cache-control: no-transform`; its status is 1xx, 204, 206 or 304; its content
+type is not compressible; or compressing did not make it smaller.
+[`sendfile`](@ref) responses and event streams are never compressed.
+A [`stream`](@ref) left at `compress = :auto` is compressed as it is written.
+
+Whenever the content type is compressible Facil adds `vary: accept-encoding`,
+so caches keep the variants apart.
+
+Compression runs where the handler runs: on a worker task, or on the reactor
+thread for an inline handler, where a large body delays other connections.
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> import Downloads
+
+julia> opts = CompressOptions(; prefer = (:gzip,), min_size = 100);
+
+julia> server = serve!(req -> "hello "^1000, 0; compress = opts);
+
+julia> r = Downloads.request("http://127.0.0.1:\$(port(server))/"; output = devnull, headers = ["Accept-Encoding" => "gzip"]);
+
+julia> Dict(r.headers)["content-encoding"]
+"gzip"
+
+julia> close(server)
+```
+
+See the [compression guide](@ref compression-guide).
 """
 struct CompressOptions
     prefer::Vector{Symbol}
@@ -451,8 +534,30 @@ const COMPRESSIBLE_APP = ("json", "javascript", "ecmascript", "xml", "wasm", "x-
 """
     Facil.compressible_type(content_type) -> Bool
 
-Default test for [`CompressOptions`](@ref): `text/*`, JSON, JavaScript, XML
-(and `+json`/`+xml` types), SVG, WebAssembly and a few other text formats.
+The default test [`CompressOptions`](@ref) uses to decide whether a response
+of this `content-type` is worth compressing. Parameters (`; charset=...`) are
+ignored.
+
+`true` for `text/*`, any `+json` or `+xml` type, `image/svg+xml`, TrueType and
+OpenType fonts, and `application/` json, javascript, xml, wasm, x-ndjson,
+graphql, x-www-form-urlencoded, yaml, toml, sql and a few more. `false` for
+formats that are already compressed (images, video, archives, WOFF fonts).
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> Facil.compressible_type("application/json; charset=utf-8")
+true
+
+julia> Facil.compressible_type("image/png")
+false
+
+julia> mine(ct) = Facil.compressible_type(ct) || ct == "application/x-custom";
+
+julia> CompressOptions(; compressible = mine) isa CompressOptions
+true
+```
 """
 function compressible_type(ct::AbstractString)
     t = lowercase(strip(first(split(ct, ';'))))
@@ -540,9 +645,28 @@ end
 """
     Facil.compress_response(req, res, opts::CompressOptions)
 
-What `serve!(...; compress)` does to each handler result: compresses a whole
-`String` or byte body, or picks the encoding of a [`stream`](@ref) left at
-`compress = :auto`. Other results pass through.
+Apply `opts` to one handler result, as a server started with
+`serve!(...; compress = opts)` does for every result.
+
+Returns a new [`Response`](@ref) with a compressed body and `content-encoding`
+when `res` qualifies (see [`CompressOptions`](@ref)), a [`stream`](@ref)
+response with its encoding chosen, or `res` itself. Call it in a handler to
+compress only some routes on a server started without `compress`.
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> req = Request(Methods.GET, "/"; headers = ["accept-encoding" => "gzip"]);
+
+julia> res = Facil.compress_response(req, Response(StatusCodes.OK, "hello "^1000), CompressOptions());
+
+julia> String(headers(res)["content-encoding"])
+"gzip"
+
+julia> sizeof(body(res)) < 100
+true
+```
 """
 compress_response(req, res, ::CompressOptions) = res
 compress_response(req, res::AbstractString, o::CompressOptions) =

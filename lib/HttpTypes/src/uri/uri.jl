@@ -1,16 +1,73 @@
 """
-    Uri
-
-An HTTP request target or URI: origin-form (`/path?q`), absolute-form
-(`http://host/path`), authority-form (`host:443`) or asterisk-form (`*`).
-All components are views into one `String`.
-
-    Uri(src)                   # string, bytes, or (ptr, len); throws InvalidUri
-    tryparse(Uri, src)         # or nothing
-    uri"/static"               # validated at macro expansion
-    Uri(; scheme, authority, path_and_query)   # builder; throws InvalidUri / InvalidUriParts
+    Uri(src)
+    Uri(ptr::Ptr{UInt8}, len::Integer)
+    Uri(; scheme = nothing, authority = nothing, path_and_query = nothing)
     Uri(parts::UriParts)
-    Uri(a::Authority), Uri(pq::PathAndQuery)
+    Uri(a::Authority)
+    Uri(pq::PathAndQuery)
+    tryparse(Uri, src)
+    parse(Uri, src)
+
+A URI as used in HTTP: the request target of a [`Request`](@ref).
+
+Four forms parse:
+
+| Form | Example | Used for |
+|:--|:--|:--|
+| origin | `/users/42?full=1` | ordinary requests to a server |
+| absolute | `https://example.com/users/42` | requests to a proxy, client-side URLs |
+| authority | `example.com:443` | `CONNECT` |
+| asterisk | `*` | `OPTIONS *` |
+
+# Arguments
+- `src`: an `AbstractString` or `AbstractVector{UInt8}`, at most 65,534 bytes; or
+  a `Uri` (returned as is).
+- `scheme`, `authority`, `path_and_query`: components for the keyword form, each
+  a string or an already-parsed [`Scheme`](@ref), [`Authority`](@ref) or
+  [`PathAndQuery`](@ref). With no keywords the result is `uri"/"`.
+- `parts`: a [`UriParts`](@ref).
+
+# Returns
+An immutable `Uri`. `tryparse` returns `nothing` instead of throwing. Read it
+with [`scheme`](@ref), [`authority`](@ref), [`host`](@ref), [`port`](@ref),
+[`path`](@ref), [`query`](@ref) and [`path_and_query`](@ref).
+
+# Throws
+- [`InvalidUri`](@ref) if `src` or a keyword component does not parse.
+- [`InvalidUriParts`](@ref) if the components do not combine: a scheme needs an
+  authority and a path; an authority with a path needs a scheme.
+
+# Notes
+- Nothing is percent-decoded or normalised, and a fragment (`#...`) is dropped.
+- A relative reference without a leading slash (`"a/b"`) does not parse as a
+  path; it is read as an authority or rejected.
+- A port that is not a number in `0:65535` does not make the URI invalid;
+  [`port`](@ref) is then `nothing`.
+- `==` and `hash` work component by component: scheme and authority ignoring
+  ASCII case, path and query exactly. `u == "..."` compares with a string the
+  same way, ignoring any fragment in the string.
+- `string(u)` and `print` give the text; `show` prints the literal `uri"..."`.
+- For a literal, [`uri"..."`](@ref @uri_str) validates when the code is parsed.
+
+# Examples
+```jldoctest
+julia> u = Uri("https://example.com:8443/users/42?full=1")
+uri"https://example.com:8443/users/42?full=1"
+
+julia> scheme(u), host(u), port(u), path(u), query(u)
+(Schemes.HTTPS, "example.com", Port(8443), "/users/42", "full=1")
+
+julia> t = Uri("/users/42?full=1");
+
+julia> host(t) === nothing, path(t)
+(true, "/users/42")
+
+julia> Uri(; scheme = "https", authority = "example.com", path_and_query = "/x")
+uri"https://example.com/x"
+
+julia> tryparse(Uri, "/has space") === nothing
+true
+```
 """
 struct Uri
     scheme::Scheme                  # tag 0x00 when absent
@@ -22,10 +79,36 @@ end
 const _U_DEFAULT = _u_uri(_U_SCHEME_NONE, _U_AUTHORITY_EMPTY, _U_PQ_SLASH)
 
 """
-    UriParts(; scheme=nothing, authority=nothing, path_and_query=nothing)
+    UriParts(; scheme = nothing, authority = nothing, path_and_query = nothing)
     UriParts(u::Uri)
 
-The mutable components of a [`Uri`](@ref) (the crate's `uri::Parts`).
+The components of a [`Uri`](@ref) as a mutable struct (the crate's
+`uri::Parts`): take a URI apart, change a component, and build a new URI with
+`Uri(parts)`.
+
+# Fields
+- `scheme::Union{Nothing,Scheme}`
+- `authority::Union{Nothing,Authority}`
+- `path_and_query::Union{Nothing,PathAndQuery}`
+
+The keyword constructor and field assignment take already-parsed components
+(`Scheme("https")`, `Schemes.HTTPS`, `Authority("example.com")`,
+`PathAndQuery("/x")`), not strings. Use `Uri(; scheme = "https", ...)` to build
+from strings.
+
+`Uri(parts)` throws [`InvalidUriParts`](@ref) if the components do not combine.
+
+# Examples
+```jldoctest
+julia> p = UriParts(uri"http://example.com/a?x=1");
+
+julia> p.scheme = Schemes.HTTPS;
+
+julia> p.path_and_query = PathAndQuery("/b");
+
+julia> Uri(p)
+uri"https://example.com/b"
+```
 """
 mutable struct UriParts
     scheme::Union{Nothing,Scheme}
@@ -87,8 +170,28 @@ Base.convert(::Type{Port}, n::Integer) = Port(n)
 """
     HttpTypes.uri_from_target(path_ptr, path_len, query_ptr, query_len) -> Uri
 
-Build a `Uri` from a request target already split into path and query bytes, with one
-`String` allocation. Pass `query_len < 0` when the target had no `?`. Throws [`InvalidUri`](@ref).
+Build a [`Uri`](@ref) from a request target that a parser has already split into
+path bytes and query bytes, with a single `String` allocation. Not exported.
+
+# Arguments
+- `path_ptr::Ptr`, `path_len::Integer`: the path bytes.
+- `query_ptr::Ptr`, `query_len::Integer`: the query bytes, without the `?`. Pass
+  `query_len < 0` when the target had no `?` (`query_ptr` is then not read);
+  `0` gives an empty query.
+
+# Throws
+- [`InvalidUri`](@ref), as `Uri(src)` does for the joined text.
+
+# Examples
+```jldoctest
+julia> p, q = "/users", "page=2";
+
+julia> GC.@preserve p q HttpTypes.uri_from_target(pointer(p), sizeof(p), pointer(q), sizeof(q))
+uri"/users?page=2"
+
+julia> GC.@preserve p HttpTypes.uri_from_target(pointer(p), sizeof(p), C_NULL, -1)
+uri"/users"
+```
 """
 function uri_from_target(pp::Ptr, pn::Integer, qp::Ptr, qn::Integer)
     pp, qp = Ptr{UInt8}(pp), Ptr{UInt8}(qp)
@@ -110,7 +213,18 @@ end
 """
     uri"..."
 
-A `Uri` literal, parsed and validated when the macro expands.
+A [`Uri`](@ref) literal, parsed and validated when the code is parsed: a
+malformed literal is an error at macro expansion ([`InvalidUri`](@ref)), before
+the program runs.
+
+# Examples
+```jldoctest
+julia> uri"/static/app.js"
+uri"/static/app.js"
+
+julia> path(uri"https://example.com/a?b")
+"/a"
+```
 """
 macro uri_str(s)
     return Uri(s)
@@ -162,15 +276,70 @@ function Uri(; scheme=nothing, authority=nothing, path_and_query=nothing)
         path_and_query === nothing ? nothing : _u_builder_pq(path_and_query)))
 end
 
-"The path and query, or `nothing` for an authority-form `Uri`."
+"""
+    path_and_query(u::Uri) -> Union{PathAndQuery,Nothing}
+
+The [`PathAndQuery`](@ref) of a URI, or `nothing` for an authority-form URI
+(`example.com:443`), which has none.
+
+# Examples
+```jldoctest
+julia> path_and_query(uri"https://example.com/a?x=1")
+PathAndQuery("/a?x=1")
+
+julia> path_and_query(Uri("example.com:443")) === nothing
+true
+```
+"""
 path_and_query(u::Uri) =
     (u.scheme.tag != 0x00 || isempty(u.authority.data)) ? u.path_and_query : nothing
 path(u::Uri) = _u_has_path(u) ? path(u.path_and_query) : _U_EMPTY
-"The [`Scheme`](@ref), or `nothing`."
+"""
+    scheme(u::Uri) -> Union{Scheme,Nothing}
+
+The [`Scheme`](@ref) of a URI, or `nothing` when it has none (origin-form and
+authority-form URIs).
+
+# Examples
+```jldoctest
+julia> scheme(uri"https://example.com/")
+Schemes.HTTPS
+
+julia> scheme(uri"/a") === nothing
+true
+```
+"""
 scheme(u::Uri) = u.scheme.tag == 0x00 ? nothing : u.scheme
-"The scheme as a string, or `nothing`."
+"""
+    scheme_str(u::Uri) -> Union{SubString{String},Nothing}
+
+The scheme of a URI as text, as written, or `nothing` when it has none.
+
+# Examples
+```jldoctest
+julia> scheme_str(uri"https://example.com/")
+"https"
+
+julia> scheme_str(uri"/a") === nothing
+true
+```
+"""
 scheme_str(u::Uri) = u.scheme.tag == 0x00 ? nothing : as_str(u.scheme)
-"The [`Authority`](@ref), or `nothing`."
+"""
+    authority(u::Uri) -> Union{Authority,Nothing}
+
+The [`Authority`](@ref) of a URI (`[userinfo@]host[:port]`), or `nothing` when
+it has none, as in an origin-form request target.
+
+# Examples
+```jldoctest
+julia> authority(uri"https://example.com:8443/a")
+Authority("example.com:8443")
+
+julia> authority(uri"/a") === nothing
+true
+```
+"""
 authority(u::Uri) = isempty(u.authority.data) ? nothing : u.authority
 host(u::Uri) = isempty(u.authority.data) ? nothing : host(u.authority)
 port(u::Uri) = isempty(u.authority.data) ? nothing : port(u.authority)

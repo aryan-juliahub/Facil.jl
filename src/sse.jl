@@ -5,10 +5,20 @@
 """
     SSEStream
 
-An open event stream, handed to the function given to [`sse`](@ref).
-[`write_event`](@ref) sends an event, `isopen` turns false once the client has
-gone, `wait(s)` blocks until then, `close(s)` ends the stream, and
-[`last_event_id`](@ref) is the client's `Last-Event-ID` (or `nothing`).
+An open event stream. [`sse`](@ref) passes one to your function.
+
+| Call | Effect |
+|:--|:--|
+| [`write_event(s; data, event, id, retry)`](@ref write_event) | send one event |
+| [`Facil.write_comment(s, text)`](@ref) | send a comment line (a keep-alive) |
+| [`last_event_id(s)`](@ref last_event_id) | the `Last-Event-ID` the client reconnected with, or `nothing` |
+| `isopen(s)` | `false` once the client has gone or the stream is closed |
+| `wait(s)` | block until the client has gone or the stream is closed |
+| [`close(s)`](@ref Base.close(::SSEStream)) | close the connection; done for you when your function returns |
+
+`write_event`, `Facil.write_comment` and `close` may be called from any task
+or thread, so another part of your program can keep the `SSEStream` and push
+events to it while your function waits in `wait(s)`.
 """
 mutable struct SSEStream
     const last_event_id::Union{Nothing,String}
@@ -36,7 +46,32 @@ Base.show(io::IO, s::SSEStream) = print(io, "Facil.SSEStream(", isopen(s) ? "ope
 """
     last_event_id(s::SSEStream) -> Union{Nothing,String}
 
-The `Last-Event-ID` header the client reconnected with.
+The value of the `Last-Event-ID` request header, or `nothing` if the client
+sent none.
+
+A browser's `EventSource` reconnects by itself after a dropped connection and
+sends the `id` of the last event it received. Use it to resume where the client
+left off.
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> import Downloads
+
+julia> server = serve!(0) do req
+           sse(req) do s
+               write_event(s, "resuming after " * something(last_event_id(s), "nothing"))
+           end
+       end;
+
+julia> url = "http://127.0.0.1:\$(port(server))/";
+
+julia> print(String(take!(Downloads.download(url, IOBuffer(); headers = ["Last-Event-ID" => "41"]))))
+data: resuming after 41
+
+julia> close(server)
+```
 """
 last_event_id(s::SSEStream) = s.last_event_id
 
@@ -51,12 +86,56 @@ end
 
 """
     write_event(s::SSEStream; data = nothing, event = nothing, id = nothing, retry = nothing) -> Bool
-    write_event(s::SSEStream, data)
+    write_event(s::SSEStream, data) -> Bool
 
-Sends one event. `data` may span lines (each becomes a `data:` line); `event`
-and `id` must be single lines; `retry` is the client's reconnection delay in
-milliseconds. Returns `false` once the client has gone. On a task the call
-waits while more than the stream's `high_water` bytes are queued.
+Send one event on an event stream.
+
+# Arguments
+- `data`: the payload. Anything `string` accepts, or a byte vector holding
+  UTF-8. Line breaks are allowed: each line becomes its own `data:` line and
+  the client joins them with `\\n`.
+- `event`: the event type, for `addEventListener(type, ...)` in a browser.
+  Without it the client fires `message`.
+- `id`: the event id. The client sends the last one back as `Last-Event-ID`
+  when it reconnects; see [`last_event_id`](@ref).
+- `retry::Integer`: how many milliseconds the client should wait before
+  reconnecting.
+
+# Returns
+`true` if the event was queued, `false` if the client has gone or the stream
+is closed (nothing is sent then, and nothing is thrown).
+
+# Throws
+- `ArgumentError` if all four are `nothing`, or if `event` or `id` contains a
+  line break.
+
+# Notes
+Called on a task, it blocks while more than the stream's `high_water` bytes
+wait for a slow client. It may be called from any thread.
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> import Downloads
+
+julia> server = serve!(0) do req
+           sse(req) do s
+               write_event(s; event = "price", data = "42.10", id = 7)
+               write_event(s, "two\\nlines")
+           end
+       end;
+
+julia> print(String(take!(Downloads.download("http://127.0.0.1:\$(port(server))/", IOBuffer()))))
+event: price
+id: 7
+data: 42.10
+
+data: two
+data: lines
+
+julia> close(server)
+```
 """
 function write_event(s::SSEStream; data = nothing, event = nothing, id = nothing, retry::Union{Nothing,Integer} = nothing)
     io = IOBuffer()
@@ -76,9 +155,14 @@ end
 write_event(s::SSEStream, data) = write_event(s; data)
 
 """
-    Facil.write_comment(s::SSEStream, text = "")
+    Facil.write_comment(s::SSEStream, text = "") -> Bool
 
-Sends a comment line (`: text`), which clients ignore; useful as a keep-alive.
+Send a comment line (`: text`) on an event stream. Clients ignore comments, so
+this is the usual keep-alive for streams that are quiet for long stretches:
+proxies and load balancers close connections that carry no bytes.
+
+Returns `true` if it was queued, `false` if the client has gone. Throws
+`ArgumentError` if `text` contains a line break.
 """
 write_comment(s::SSEStream, text::AbstractString = "") = send_sse(s, Vector{UInt8}(codeunits(string(": ", check_field("comment", text), "\n\n"))))
 
@@ -98,7 +182,12 @@ end
 """
     close(s::SSEStream)
 
-Closes the connection. Called for you when the function given to [`sse`](@ref) returns.
+Close an event stream and its connection.
+
+[`sse`](@ref) calls this when your function returns. Call it from elsewhere to
+end a stream whose function is blocked in `wait(s)`. Closing twice does
+nothing. A browser `EventSource` treats the close as a dropped connection and
+reconnects; answer the reconnect with status 204 to make it stop.
 """
 function Base.close(s::SSEStream)
     _, ok = @atomicreplace s.closed false => true
@@ -127,25 +216,69 @@ const LAST_EVENT_ID = hn"last-event-id"
 """
     sse(f, req; headers = [], high_water = 1 MiB) -> Response
 
-Answers `req` with an event stream (`text/event-stream`); the handler returns
-it. `f(s::SSEStream)` runs on its own task and the connection stays open until
-it returns or the client goes away:
+Answer `req` with an event stream (server-sent events, `text/event-stream`).
 
-```julia
-serve!(8080) do req
-    sse(req) do s
-        n = something(tryparse(Int, something(last_event_id(s), "0")), 0)
-        while isopen(s)
-            write_event(s; data = "tick \$n", id = n)
-            n += 1
-            Facil.sleep(1)
-        end
-    end
-end
+Return the result from your handler. Facil sends the response head, then calls
+`f(s)` with an [`SSEStream`](@ref) on a worker task. The connection stays open
+until `f` returns or the client goes away.
+
+# Arguments
+- `f`: `f(s::SSEStream)`. It runs on a task whatever the server's `inline`
+  setting, so it may block, sleep and wait.
+- `req`: the request being answered. Its `Last-Event-ID` header becomes
+  [`last_event_id(s)`](@ref last_event_id).
+
+# Keywords
+- `headers = []`: extra response headers, as `name => value` pairs or a
+  [`HeaderMap`](@ref) (for example `access-control-allow-origin`).
+- `high_water::Integer = 1 MiB`: [`write_event`](@ref) blocks while more than
+  this many bytes wait for the client.
+
+# Returns
+A [`Response`](@ref) to return from the handler.
+
+# Throws
+- `ArgumentError` if `high_water` is not positive.
+
+# Notes
+- The connection belongs to the event stream from then on: it serves no
+  further HTTP requests and is closed when `f` returns.
+- Facil does not check the request's `Accept` header. Decide in your handler
+  which requests get an event stream, by path or by `Accept: text/event-stream`.
+- If `f` throws, the error is logged and the stream is closed.
+- The response is never compressed.
+- A stream that sends nothing for longer than a proxy's idle timeout gets cut
+  off; send [`Facil.write_comment`](@ref) every 15 to 30 seconds.
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> import Downloads
+
+julia> server = serve!(0) do req
+           sse(req) do s
+               for n in 1:3
+                   write_event(s; data = "tick \$n", id = n)
+                   Facil.sleep(0.01)
+               end
+           end
+       end;
+
+julia> print(String(take!(Downloads.download("http://127.0.0.1:\$(port(server))/", IOBuffer()))))
+id: 1
+data: tick 1
+
+id: 2
+data: tick 2
+
+id: 3
+data: tick 3
+
+julia> close(server)
 ```
 
-The connection is no longer HTTP afterwards (no further requests on it).
-Requests with `Accept: text/event-stream` reach the handler like any other.
+See the [server-sent events guide](@ref sse-guide).
 """
 function sse(f, req; headers = HeaderMap{HeaderValue}(), high_water::Integer = 1024 * 1024)
     high_water > 0 || throw(ArgumentError("high_water must be positive"))

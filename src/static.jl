@@ -30,8 +30,32 @@ end
 """
     Facil.register_mime!(ext, type)
 
-Sets the `content-type` sent for files ending in `.ext`, by `public_folder` and
-[`sendfile`](@ref). Call it before serving; the table is process-wide.
+Set the `content-type` sent for files whose name ends in `.ext`, by
+`public_folder` and [`sendfile`](@ref).
+
+# Arguments
+- `ext::AbstractString`: the extension, with or without the leading dot; case
+  is ignored. 1 to 15 bytes.
+- `type::AbstractString`: the full header value, for example
+  `"text/x-log; charset=utf-8"`.
+
+# Throws
+- `ArgumentError` for an empty or over-long extension, or a type containing a
+  NUL or a line break.
+
+# Notes
+The table is process-wide and shared by every server. Register before the
+first request for such a file. Registering an extension again replaces it.
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> Facil.register_mime!(".log", "text/x-log; charset=utf-8")
+
+julia> Facil.mime_type("server.log")
+"text/x-log; charset=utf-8"
+```
 """
 function register_mime!(ext::AbstractString, type::AbstractString)
     e = lowercase(String(lstrip(ext, '.')))
@@ -45,8 +69,23 @@ end
 """
     Facil.mime_type(path) -> String
 
-The `content-type` for a file name, by extension; `application/octet-stream`
-when the extension is unknown.
+The `content-type` Facil sends for a file name, chosen by its extension
+(case-insensitive). Returns `"application/octet-stream"` for an unknown
+extension or none. The file does not have to exist.
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> Facil.mime_type("index.html")
+"text/html; charset=utf-8"
+
+julia> Facil.mime_type("photo.JPG")
+"image/jpeg"
+
+julia> Facil.mime_type("data.unknown")
+"application/octet-stream"
+```
 """
 function mime_type(path::AbstractString)
     _, ext = splitext(basename(path))
@@ -64,16 +103,70 @@ end
 
 """
     sendfile(path; status = 200, headers = []) -> Response
-    sendfile(req, path; kw...)
+    sendfile(req, path; status = 200, headers = []) -> Response
 
-A response that sends the file at `path` (taken as is, not URL-decoded) with
-`sendfile(2)`. The `content-type` comes from the extension (see
-[`Facil.mime_type`](@ref)), with `etag`, `last-modified`, `accept-ranges`,
-answers to `If-None-Match` (304), `If-Range` and single-range `Range` requests
-(206, 416), and HEAD and OPTIONS. When the client accepts gzip and `path.gz`
-exists, that file is sent with `content-encoding: gzip`. A missing file gives
-404; methods other than GET, HEAD and OPTIONS give 405. Headers given here are
-sent too, except those the file sender sets itself.
+Answer with the contents of the file at `path`, sent by the kernel
+(`sendfile(2)`) without passing through Julia.
+
+Return the result from your handler.
+
+# Arguments
+- `path::AbstractString`: the file to send. It is used as given: not
+  URL-decoded, not checked against any root directory. Never build it from the
+  request target without validating it yourself.
+- `req`: accepted and ignored, so `sendfile(req, path)` reads like the other
+  response functions.
+
+# Keywords
+- `status = 200`: the status for a full response.
+- `headers = []`: extra headers, as `name => value` pairs or a
+  [`HeaderMap`](@ref). Headers the file sender sets itself win.
+
+# Returns
+A [`Response`](@ref) to return from the handler. The file is opened when the
+response is sent, not when `sendfile` is called.
+
+# Throws
+- `ArgumentError` if `path` contains a NUL.
+
+# What the client gets
+- `content-type` from the extension (see [`Facil.mime_type`](@ref)),
+  `content-length`, `etag`, `last-modified` and `accept-ranges: bytes`.
+- `304 Not Modified` for a matching `If-None-Match`.
+- `206 Partial Content` for a single-range `Range` request (honouring
+  `If-Range`), `416` for a range outside the file.
+- The head only, for `HEAD`. An `allow` header for `OPTIONS`.
+- `path * ".gz"` instead, with `content-encoding: gzip`, when that file exists
+  and the client accepts gzip.
+- `404` if the file does not exist; `405` with `allow: GET, HEAD, OPTIONS` for
+  any other method.
+
+# Examples
+```jldoctest
+julia> using Facil
+
+julia> import Downloads
+
+julia> dir = mktempdir(); write(joinpath(dir, "report.csv"), "a,b\\n1,2\\n");
+
+julia> server = serve!(0) do req
+           sendfile(joinpath(dir, "report.csv"); headers = ["content-disposition" => "attachment"])
+       end;
+
+julia> out = IOBuffer();
+
+julia> r = Downloads.request("http://127.0.0.1:\$(port(server))/"; output = out);
+
+julia> String(take!(out))
+"a,b\\n1,2\\n"
+
+julia> Dict(r.headers)["content-type"]
+"text/csv; charset=utf-8"
+
+julia> close(server)
+```
+
+See the [static files guide](@ref static-guide).
 """
 function sendfile(path::AbstractString; status = StatusCodes.OK, headers = HeaderMap{HeaderValue}())
     p = String(path)

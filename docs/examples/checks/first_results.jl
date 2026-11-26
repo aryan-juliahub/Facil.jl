@@ -1,0 +1,18 @@
+r = http(ex, "GET", "/text")
+@test (r.status, r.body, r.headers["content-type"]) == (200, "a String is sent as 200 text/plain", "text/plain; charset=utf-8")
+r = http(ex, "GET", "/json")
+@test (r.status, r.body, r.headers["content-type"]) == (200, """{"ok":true}""", "application/json")
+r = http(ex, "GET", "/bytes")
+@test (r.status, r.headers["content-type"], r.headers["content-length"]) == (200, "application/octet-stream", "4")
+r = http(ex, "GET", "/created")
+@test (r.status, r.body, r.headers["location"]) == (201, "made", "/things/1")
+r = http(ex, "GET", "/empty")
+@test (r.status, r.body) == (204, "")
+@test !haskey(r.headers, "content-type")
+r = http(ex, "GET", "/boom")
+@test (r.status, r.body) == (500, "Internal Server Error")
+r = http(ex, "GET", "/missing")
+@test (r.status, r.body) == (404, "no such page\n")
+@test_throws ArgumentError Response(404)
+@test status(Response(StatusCodes.NOT_FOUND)) == 404
+@test body(Response(StatusCodes.NOT_FOUND)) === nothing

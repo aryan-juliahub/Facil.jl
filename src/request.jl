@@ -35,8 +35,11 @@ end
 """
     read_request(h) -> Request{String}
 
-Copies the request facil.io parsed on `h` into HttpTypes values. Throws an
-HttpTypes error when the method, target or a header name is invalid.
+Copies the request facil.io parsed on `h` into HttpTypes values, with the body
+facil.io buffered. Throws an HttpTypes error when the method, target or a
+header name is invalid. Internal: the server calls `read_request(srv, h)`,
+which applies `before_body` and falls back to this method for requests
+without a body.
 """
 @noinline function read_request(h::Ptr{Cvoid})
     r = unsafe_load(@ccall LIBFJL.fjl_req_read(h::Ptr{Cvoid})::Ptr{CRequest})

@@ -2,21 +2,84 @@ export StatusCode, StatusCodes, InvalidStatusCode, canonical_reason,
     is_informational, is_success, is_redirection, is_client_error, is_server_error
 
 """
-    InvalidStatusCode
+    InvalidStatusCode <: HttpError
 
-Thrown when a value is not a status code in `100:999`.
+Thrown by [`StatusCode`](@ref) (and by anything that converts to one, such as
+`Response(; status = ...)`) for an integer outside `100:999`, or for text that
+is not exactly three ASCII digits with a non-zero first digit. The message is
+`invalid status code`.
+
+# Examples
+```jldoctest
+julia> StatusCode(99)
+ERROR: invalid status code
+[...]
+
+julia> tryparse(StatusCode, 1000) === nothing
+true
+```
 """
 struct InvalidStatusCode <: HttpError end
 Base.showerror(io::IO, ::InvalidStatusCode) = print(io, "invalid status code")
 
 """
-    StatusCode(code)
+    StatusCode(code::Integer)
+    StatusCode(src)
+    StatusCode(ptr::Ptr{UInt8}, len::Integer)
+    StatusCode()
     tryparse(StatusCode, src)
+    parse(StatusCode, src)
 
-An HTTP status code in `100:999`, from an integer or from exactly three ASCII digits
-(string, bytes, or pointer and length). Registered codes are `StatusCodes.OK`, ...;
-the default is `StatusCodes.OK`. `UInt16(s)` gives the number, `as_str(s)` the digits,
-`string(s)` the digits and reason (`"404 Not Found"`).
+An HTTP status code in `100:999`.
+
+Registered codes are constants in `StatusCodes` (`StatusCodes.OK`, ...). Codes
+that are not registered are valid too, as long as they are in range.
+
+# Arguments
+- `code::Integer`: the numeric code.
+- `src`: an `AbstractString` or `AbstractVector{UInt8}` of exactly three ASCII
+  digits, or a `StatusCode` (returned as is).
+- `ptr`, `len`: a pointer to `len` bytes holding the digits.
+
+# Returns
+A `StatusCode`. `StatusCode()` is `StatusCodes.OK`. `tryparse` accepts the same
+sources (including an integer) and returns `nothing` instead of throwing.
+
+# Throws
+- [`InvalidStatusCode`](@ref) if the code is outside `100:999` or the text is not
+  three digits.
+
+# Notes
+- `UInt16(s)` and `Int(s)` give the number; `s == 404` compares with an integer.
+  Codes order (`isless`) by number.
+- [`as_str`](@ref) gives the digits (`"404"`). `string(s)` and `print` give the
+  digits and the reason phrase (`"404 Not Found"`), or
+  `"299 <unknown status code>"` for an unregistered code.
+- `show` prints `StatusCodes.NOT_FOUND`, or `StatusCode(299)` for an unregistered
+  code.
+- `convert(StatusCode, x)` accepts integers, strings and bytes, so
+  `response.status = 404` works.
+
+# Examples
+```jldoctest
+julia> StatusCode(404)
+StatusCodes.NOT_FOUND
+
+julia> StatusCode("201") === StatusCodes.CREATED
+true
+
+julia> s = StatusCode(299)
+StatusCode(299)
+
+julia> Int(s), string(s), canonical_reason(s)
+(299, "299 <unknown status code>", nothing)
+
+julia> StatusCodes.OK == 200, string(StatusCodes.OK)
+(true, "200 OK")
+```
+
+See also [`canonical_reason`](@ref), [`is_success`](@ref),
+[`is_client_error`](@ref), [`is_server_error`](@ref).
 """
 struct StatusCode
     code::UInt16
@@ -102,7 +165,32 @@ const _S_TABLE = (
     (511, :NETWORK_AUTHENTICATION_REQUIRED, "Network Authentication Required"),
 )
 
-"The registered status codes: `StatusCodes.OK`, `StatusCodes.NOT_FOUND`, ..."
+"""
+    StatusCodes
+
+The registered status codes as [`StatusCode`](@ref HttpTypes.StatusCode) constants, named as in the
+`http` crate: `StatusCodes.OK` (200), `StatusCodes.CREATED` (201),
+`StatusCodes.NO_CONTENT` (204), `StatusCodes.MOVED_PERMANENTLY` (301),
+`StatusCodes.FOUND` (302), `StatusCodes.NOT_MODIFIED` (304),
+`StatusCodes.BAD_REQUEST` (400), `StatusCodes.UNAUTHORIZED` (401),
+`StatusCodes.FORBIDDEN` (403), `StatusCodes.NOT_FOUND` (404),
+`StatusCodes.METHOD_NOT_ALLOWED` (405), `StatusCodes.PAYLOAD_TOO_LARGE` (413),
+`StatusCodes.UNPROCESSABLE_ENTITY` (422), `StatusCodes.TOO_MANY_REQUESTS` (429),
+`StatusCodes.INTERNAL_SERVER_ERROR` (500), `StatusCodes.SERVICE_UNAVAILABLE`
+(503) and the rest of the registry: 62 constants in all.
+
+The constants are not exported one by one; write `StatusCodes.OK`. A code
+without a constant is built with `StatusCode(n)`.
+
+# Examples
+```jldoctest
+julia> StatusCodes.IM_A_TEAPOT
+StatusCodes.IM_A_TEAPOT
+
+julia> Int(StatusCodes.IM_A_TEAPOT), canonical_reason(StatusCodes.IM_A_TEAPOT)
+(418, "I'm a teapot")
+```
+"""
 baremodule StatusCodes end
 for (n, k, _) in _S_TABLE
     Core.eval(StatusCodes, :(const $k = $(_s_unchecked(UInt16(n)))))
@@ -123,22 +211,83 @@ end
 const _S_DIGITS = [string(i) for i in 100:999]
 
 """
-    canonical_reason(s::StatusCode)
+    canonical_reason(s::StatusCode) -> Union{String,Nothing}
 
-The registered reason phrase (`"Not Found"` for 404), or `nothing` for an unregistered code.
+The registered reason phrase of a status code, or `nothing` when the code is not
+registered.
+
+# Examples
+```jldoctest
+julia> canonical_reason(StatusCodes.NOT_FOUND)
+"Not Found"
+
+julia> canonical_reason(StatusCode(299)) === nothing
+true
+```
 """
 canonical_reason(s::StatusCode) = @inbounds _S_REASONS[getfield(s, :code)-99]
 as_str(s::StatusCode) = @inbounds _S_DIGITS[getfield(s, :code)-99]
 
-"Whether the code is in `100:199`."
+"""
+    is_informational(s::StatusCode) -> Bool
+
+Whether the code is in `100:199`.
+
+# Examples
+```jldoctest
+julia> is_informational(StatusCodes.CONTINUE), is_informational(StatusCodes.OK)
+(true, false)
+```
+"""
 is_informational(s::StatusCode) = 100 <= s.code < 200
-"Whether the code is in `200:299`."
+"""
+    is_success(s::StatusCode) -> Bool
+
+Whether the code is in `200:299`.
+
+# Examples
+```jldoctest
+julia> is_success(StatusCodes.CREATED), is_success(StatusCodes.NOT_FOUND)
+(true, false)
+```
+"""
 is_success(s::StatusCode) = 200 <= s.code < 300
-"Whether the code is in `300:399`."
+"""
+    is_redirection(s::StatusCode) -> Bool
+
+Whether the code is in `300:399`.
+
+# Examples
+```jldoctest
+julia> is_redirection(StatusCodes.FOUND), is_redirection(StatusCodes.OK)
+(true, false)
+```
+"""
 is_redirection(s::StatusCode) = 300 <= s.code < 400
-"Whether the code is in `400:499`."
+"""
+    is_client_error(s::StatusCode) -> Bool
+
+Whether the code is in `400:499`.
+
+# Examples
+```jldoctest
+julia> is_client_error(StatusCodes.NOT_FOUND), is_client_error(StatusCodes.BAD_GATEWAY)
+(true, false)
+```
+"""
 is_client_error(s::StatusCode) = 400 <= s.code < 500
-"Whether the code is in `500:599`."
+"""
+    is_server_error(s::StatusCode) -> Bool
+
+Whether the code is in `500:599`. Codes in `600:999` are valid but belong to no
+class: all five `is_*` functions return `false` for them.
+
+# Examples
+```jldoctest
+julia> is_server_error(StatusCodes.BAD_GATEWAY), is_server_error(StatusCode(600))
+(true, false)
+```
+"""
 is_server_error(s::StatusCode) = 500 <= s.code < 600
 
 Base.UInt16(s::StatusCode) = s.code
