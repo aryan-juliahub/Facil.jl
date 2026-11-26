@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><meta name="referrer" content="no-referrer"/><title>Tutorial: a JSON API · Facil.jl</title><meta name="title" content="Tutorial: a JSON API · Facil.jl"/><meta property="og:title" content="Tutorial: a JSON API · Facil.jl"/><meta property="twitter:title" content="Tutorial: a JSON API · Facil.jl"/><meta name="description" content="Documentation for Facil.jl."/><meta property="og:description" content="Documentation for Facil.jl."/><meta property="twitter:description" content="Documentation for Facil.jl."/><meta property="og:url" content="https://aryan-juliahub.github.io/Facil.jl/getting-started/tutorial/"/><meta property="twitter:url" content="https://aryan-juliahub.github.io/Facil.jl/getting-started/tutorial/"/><link rel="canonical" href="https://aryan-juliahub.github.io/Facil.jl/getting-started/tutorial/"/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.63.2/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/facil.css" rel="stylesheet" type="text/css"/></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../../">Facil.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><span class="tocitem">Getting started</span><ul><li><a class="tocitem" href="../install/">Install</a></li><li><a class="tocitem" href="../first-server/">Your first server</a></li><li class="is-active"><a class="tocitem" href>Tutorial: a JSON API</a><ul class="internal"><li><a class="tocitem" href="#The-API"><span>The API</span></a></li><li><a class="tocitem" href="#1.-Storage"><span>1. Storage</span></a></li><li><a class="tocitem" href="#2.-Two-helpers"><span>2. Two helpers</span></a></li><li><a class="tocitem" href="#3.-Listing,-with-a-query-parameter"><span>3. Listing, with a query parameter</span></a></li><li><a class="tocitem" href="#4.-Creating,-with-validation"><span>4. Creating, with validation</span></a></li><li><a class="tocitem" href="#5.-One-note:-path-parameters"><span>5. One note: path parameters</span></a></li><li><a class="tocitem" href="#6.-Routing"><span>6. Routing</span></a></li><li><a class="tocitem" href="#7.-Serving"><span>7. Serving</span></a></li><li><a class="tocitem" href="#8.-Run-it"><span>8. Run it</span></a></li><li><a class="tocitem" href="#9.-Test-it"><span>9. Test it</span></a></li><li><a class="tocitem" href="#Where-to-go-from-here"><span>Where to go from here</span></a></li><li><a class="tocitem" href="#tutorial-whole-file"><span>The whole file</span></a></li></ul></li></ul></li><li><span class="tocitem">Guides</span><ul><li><a class="tocitem" href="../../guide/handlers/">Handlers and concurrency</a></li><li><a class="tocitem" href="../../guide/requests/">Reading requests</a></li><li><a class="tocitem" href="../../guide/bodies/">Request bodies and uploads</a></li><li><a class="tocitem" href="../../guide/responses/">Sending responses</a></li><li><a class="tocitem" href="../../guide/routing/">Routing</a></li><li><a class="tocitem" href="../../guide/json/">JSON</a></li><li><a class="tocitem" href="../../guide/streaming/">Streaming responses</a></li><li><a class="tocitem" href="../../guide/sse/">Server-sent events</a></li><li><a class="tocitem" href="../../guide/static/">Static files</a></li><li><a class="tocitem" href="../../guide/compression/">Compression</a></li><li><a class="tocitem" href="../../guide/websockets/">WebSockets</a></li><li><a class="tocitem" href="../../guide/pubsub/">Pub/sub</a></li><li><a class="tocitem" href="../../guide/tls/">HTTPS</a></li><li><a class="tocitem" href="../../guide/timers/">Timers</a></li><li><a class="tocitem" href="../../guide/shutdown/">Shutdown and signals</a></li><li><a class="tocitem" href="../../guide/errors/">Errors and logging</a></li><li><a class="tocitem" href="../../guide/testing/">Testing</a></li><li><a class="tocitem" href="../../guide/deployment/">Deployment</a></li><li><a class="tocitem" href="../../guide/performance/">Performance tuning</a></li><li><a class="tocitem" href="../../guide/security/">Security</a></li><li><a class="tocitem" href="../../guide/from-http-jl/">Migrating from HTTP.jl</a></li><li><a class="tocitem" href="../../guide/from-node/">Coming from Node.js and Express</a></li></ul></li><li><span class="tocitem">API reference</span><ul><li><a class="tocitem" href="../../api/">Overview</a></li><li><a class="tocitem" href="../../api/server/">Server</a></li><li><a class="tocitem" href="../../api/requests/">Request bodies</a></li><li><a class="tocitem" href="../../api/responses/">Responses</a></li><li><a class="tocitem" href="../../api/websockets/">WebSockets and pub/sub</a></li><li><a class="tocitem" href="../../api/tls/">HTTPS</a></li><li><a class="tocitem" href="../../api/timers/">Timers</a></li><li><a class="tocitem" href="../../api/tuning/">Tuning and diagnostics</a></li><li><input class="collapse-toggle" id="menuitem-4-9" type="checkbox"/><label class="tocitem" for="menuitem-4-9"><span class="docs-label">HttpTypes</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../api/httptypes/">Overview</a></li><li><a class="tocitem" href="../../api/httptypes/methods/">Methods</a></li><li><a class="tocitem" href="../../api/httptypes/status/">Status codes</a></li><li><a class="tocitem" href="../../api/httptypes/versions/">Versions</a></li><li><a class="tocitem" href="../../api/httptypes/headers/">Headers</a></li><li><a class="tocitem" href="../../api/httptypes/uri/">URIs</a></li><li><a class="tocitem" href="../../api/httptypes/messages/">Requests and responses</a></li><li><a class="tocitem" href="../../api/httptypes/extensions/">Extensions</a></li><li><a class="tocitem" href="../../api/httptypes/errors/">Errors</a></li></ul></li></ul></li><li><span class="tocitem">Reference</span><ul><li><a class="tocitem" href="../../reference/configuration/">Configuration</a></li><li><a class="tocitem" href="../../reference/limits/">Limits</a></li><li><a class="tocitem" href="../../reference/platforms/">Platform support</a></li><li><a class="tocitem" href="../../reference/faq/">FAQ and troubleshooting</a></li><li><a class="tocitem" href="../../reference/benchmarks/">Benchmarks</a></li><li><a class="tocitem" href="../../reference/changelog/">Changelog</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Getting started</a></li><li class="is-active"><a href>Tutorial: a JSON API</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Tutorial: a JSON API</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/aryan-juliahub/Facil.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/aryan-juliahub/Facil.jl/blob/main/docs/src/getting-started/tutorial.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="tutorial"><a class="docs-heading-anchor" href="#tutorial">Tutorial: a JSON API</a><a id="tutorial-1"></a><a class="docs-heading-anchor-permalink" href="#tutorial" title="Permalink"></a></h1><p>This tutorial builds a small but complete web service in about ten minutes: a notes API with routing, path and query parameters, JSON in and out, proper error responses and a test. At the end you run it and call it with <code>curl</code>.</p><p>You need Facil installed (<a href="../install/">Install</a>) and two more packages for JSON and for decoding query strings:</p><pre><code class="language-sh hljs">julia --project=. -e &#39;using Pkg; Pkg.add([&quot;JSON&quot;, &quot;URIs&quot;])&#39;</code></pre><p>The finished program is one file, <code>notes.jl</code>. Each section below adds a part of it; the whole file is at the <a href="#tutorial-whole-file">end of the page</a>.</p><h2 id="The-API"><a class="docs-heading-anchor" href="#The-API">The API</a><a id="The-API-1"></a><a class="docs-heading-anchor-permalink" href="#The-API" title="Permalink"></a></h2><table><tr><th style="text-align: left">Request</th><th style="text-align: left">Does</th><th style="text-align: left">Success</th></tr><tr><td style="text-align: left"><code>GET /notes</code></td><td style="text-align: left">list notes, optionally filtered with <code>?q=text</code></td><td style="text-align: left"><code>200</code>, a JSON array</td></tr><tr><td style="text-align: left"><code>POST /notes</code></td><td style="text-align: left">create a note from a JSON object with <code>title</code> and <code>text</code></td><td style="text-align: left"><code>201</code>, the note, and a <code>location</code> header</td></tr><tr><td style="text-align: left"><code>GET /notes/{id}</code></td><td style="text-align: left">fetch one note</td><td style="text-align: left"><code>200</code>, the note</td></tr><tr><td style="text-align: left"><code>DELETE /notes/{id}</code></td><td style="text-align: left">delete a note</td><td style="text-align: left"><code>204</code>, no body</td></tr><tr><td style="text-align: left"><code>GET /health</code></td><td style="text-align: left">liveness check for a load balancer</td><td style="text-align: left"><code>200</code>, <code>ok</code></td></tr></table><p>Errors are JSON too: <code>{&quot;error&quot;: &quot;...&quot;}</code> with a fitting status.</p><h2 id="1.-Storage"><a class="docs-heading-anchor" href="#1.-Storage">1. Storage</a><a id="1.-Storage-1"></a><a class="docs-heading-anchor-permalink" href="#1.-Storage" title="Permalink"></a></h2><p>The notes live in memory, in a <code>Dict</code>.</p><pre><code class="language-julia hljs">struct Note
+    id::Int
+    title::String
+    text::String
+end
+
+const NOTES = Dict{Int,Note}()
+const NOTES_LOCK = ReentrantLock()
+const NEXT_ID = Ref(1)</code></pre><p>The lock matters. Facil runs handlers on several threads at once (that is what <code>julia -t 4</code> gives you), so two requests can touch <code>NOTES</code> at the same moment. Every access to shared state needs a lock, exactly as in any threaded Julia program.</p><h2 id="2.-Two-helpers"><a class="docs-heading-anchor" href="#2.-Two-helpers">2. Two helpers</a><a id="2.-Two-helpers-1"></a><a class="docs-heading-anchor-permalink" href="#2.-Two-helpers" title="Permalink"></a></h2><p>Every response of this API is JSON, so wrap that once:</p><pre><code class="language-julia hljs">const JSON_TYPE = [header.CONTENT_TYPE =&gt; &quot;application/json&quot;]
+
+json(status, data) = Response(status, JSON.json(data); headers = JSON_TYPE)
+problem(status, message) = json(status, (error = message,))</code></pre><p><code>JSON.json</code> turns a struct, a named tuple, a <code>Dict</code> or a vector into JSON text. Facil does not set <code>content-type: application/json</code> for you, because a <code>String</code> body could be anything; the helper adds it.</p><h2 id="3.-Listing,-with-a-query-parameter"><a class="docs-heading-anchor" href="#3.-Listing,-with-a-query-parameter">3. Listing, with a query parameter</a><a id="3.-Listing,-with-a-query-parameter-1"></a><a class="docs-heading-anchor-permalink" href="#3.-Listing,-with-a-query-parameter" title="Permalink"></a></h2><pre><code class="language-julia hljs">function list_notes(req)
+    params = queryparams(something(query(uri(req)), &quot;&quot;))
+    q = lowercase(get(params, &quot;q&quot;, &quot;&quot;))
+    notes = lock(NOTES_LOCK) do
+        sort!([n for n in values(NOTES) if occursin(q, lowercase(n.title))]; by = n -&gt; n.id)
+    end
+    json(StatusCodes.OK, notes)
+end</code></pre><p><code>query(uri(req))</code> is the raw text after the <code>?</code>, or <code>nothing</code> when there is no query. Facil does not parse or percent-decode it; <code>URIs.queryparams</code> does both and returns a <code>Dict{String,String}</code>.</p><p>Note the shape of the function: take the lock, copy out what you need, release it, and only then build the response. Hold a lock for as short a time as you can.</p><h2 id="4.-Creating,-with-validation"><a class="docs-heading-anchor" href="#4.-Creating,-with-validation">4. Creating, with validation</a><a id="4.-Creating,-with-validation-1"></a><a class="docs-heading-anchor-permalink" href="#4.-Creating,-with-validation" title="Permalink"></a></h2><pre><code class="language-julia hljs">function create_note(req)
+    data = try
+        JSON.parse(body(req))
+    catch
+        return problem(StatusCodes.BAD_REQUEST, &quot;the body is not valid JSON&quot;)
+    end
+    data isa AbstractDict || return problem(StatusCodes.BAD_REQUEST, &quot;expected a JSON object&quot;)
+    title = get(data, &quot;title&quot;, nothing)
+    title isa AbstractString &amp;&amp; !isempty(title) ||
+        return problem(StatusCodes.UNPROCESSABLE_ENTITY, &quot;title is required&quot;)
+    text = get(data, &quot;text&quot;, &quot;&quot;)
+    text isa AbstractString || return problem(StatusCodes.UNPROCESSABLE_ENTITY, &quot;text must be a string&quot;)
+    note = lock(NOTES_LOCK) do
+        id = NEXT_ID[]
+        NEXT_ID[] += 1
+        NOTES[id] = Note(id, title, text)
+    end
+    Response(StatusCodes.CREATED, JSON.json(note);
+             headers = [header.CONTENT_TYPE =&gt; &quot;application/json&quot;, header.LOCATION =&gt; &quot;/notes/$(note.id)&quot;])
+end</code></pre><p><code>body(req)</code> is the request body as a <code>String</code>. The client can send anything, so each step that can fail returns an error response early:</p><ul><li><code>400 Bad Request</code> when the body is not JSON at all;</li><li><code>422 Unprocessable Entity</code> when it is JSON but a field is missing or has the wrong type.</li></ul><p>Without the <code>try</code>, bad JSON would throw inside the handler and the client would get a <code>500</code>, which wrongly says the server is at fault.</p><p>A successful create answers <code>201 Created</code> with a <code>location</code> header that points to the new note.</p><h2 id="5.-One-note:-path-parameters"><a class="docs-heading-anchor" href="#5.-One-note:-path-parameters">5. One note: path parameters</a><a id="5.-One-note:-path-parameters-1"></a><a class="docs-heading-anchor-permalink" href="#5.-One-note:-path-parameters" title="Permalink"></a></h2><pre><code class="language-julia hljs">function get_note(id)
+    note = lock(() -&gt; get(NOTES, id, nothing), NOTES_LOCK)
+    note === nothing ? problem(StatusCodes.NOT_FOUND, &quot;no note $id&quot;) : json(StatusCodes.OK, note)
+end
+
+function delete_note(id)
+    found = lock(() -&gt; pop!(NOTES, id, nothing), NOTES_LOCK)
+    found === nothing ? problem(StatusCodes.NOT_FOUND, &quot;no note $id&quot;) : Response(StatusCodes.NO_CONTENT)
+end</code></pre><p>These take the note id as an argument. The router extracts it from the path.</p><h2 id="6.-Routing"><a class="docs-heading-anchor" href="#6.-Routing">6. Routing</a><a id="6.-Routing-1"></a><a class="docs-heading-anchor-permalink" href="#6.-Routing" title="Permalink"></a></h2><p>Facil has no router. A handler looks at the method and the path and decides:</p><pre><code class="language-julia hljs">not_allowed(allow) = Response(StatusCodes.METHOD_NOT_ALLOWED, JSON.json((error = &quot;method not allowed&quot;,));
+                              headers = [header.CONTENT_TYPE =&gt; &quot;application/json&quot;, header.ALLOW =&gt; allow])
+
+function app(req)
+    m, p = method(req), path(uri(req))
+    if p == &quot;/notes&quot;
+        m == Methods.GET &amp;&amp; return list_notes(req)
+        m == Methods.POST &amp;&amp; return create_note(req)
+        return not_allowed(&quot;GET, POST&quot;)
+    end
+    found = match(r&quot;^/notes/(\d+)$&quot;, p)
+    if found !== nothing
+        id = parse(Int, found[1])
+        m == Methods.GET &amp;&amp; return get_note(id)
+        m == Methods.DELETE &amp;&amp; return delete_note(id)
+        return not_allowed(&quot;GET, DELETE&quot;)
+    end
+    p == &quot;/health&quot; &amp;&amp; return Response(StatusCodes.OK, &quot;ok&quot;)
+    problem(StatusCodes.NOT_FOUND, &quot;no such route&quot;)
+end</code></pre><ul><li><code>method(req)</code> compares with the constants in <code>Methods</code>.</li><li><code>path(uri(req))</code> is the path without the query string.</li><li>A regular expression captures the path parameter. <code>\d+</code> only matches digits, so <code>parse(Int, ...)</code> cannot fail.</li><li>A known path with the wrong method gets <code>405 Method Not Allowed</code> and an <code>allow</code> header, which is what HTTP asks for. An unknown path gets <code>404</code>.</li></ul><p>For larger applications, <a href="../../guide/routing/">Routing</a> shows a small table-driven router you can copy.</p><h2 id="7.-Serving"><a class="docs-heading-anchor" href="#7.-Serving">7. Serving</a><a id="7.-Serving-1"></a><a class="docs-heading-anchor-permalink" href="#7.-Serving" title="Permalink"></a></h2><pre><code class="language-julia hljs">if abspath(PROGRAM_FILE) == @__FILE__
+    serve(app, &quot;127.0.0.1&quot;, 8080; max_body_size = 64 * 1024)
+end</code></pre><p><code>max_body_size</code> caps request bodies at 64 KiB; a larger one gets <code>413 Payload Too Large</code> before your handler runs. A notes API has no reason to accept the default 50 MiB.</p><p>The <code>if</code> makes the file do two jobs: run as a program (<code>julia notes.jl</code> serves), and be <code>include</code>d by a test without starting a server.</p><h2 id="8.-Run-it"><a class="docs-heading-anchor" href="#8.-Run-it">8. Run it</a><a id="8.-Run-it-1"></a><a class="docs-heading-anchor-permalink" href="#8.-Run-it" title="Permalink"></a></h2><pre><code class="language-sh hljs">julia -t 4 --project=. notes.jl</code></pre><p>In another terminal:</p><pre><code class="language-sh hljs">$ curl -i -X POST http://127.0.0.1:8080/notes -d &#39;{&quot;title&quot;: &quot;Buy milk&quot;, &quot;text&quot;: &quot;2 litres&quot;}&#39;
+HTTP/1.1 201 Created
+content-type: application/json
+location: /notes/1
+content-length: 45
+
+{&quot;id&quot;:1,&quot;title&quot;:&quot;Buy milk&quot;,&quot;text&quot;:&quot;2 litres&quot;}
+
+$ curl &#39;http://127.0.0.1:8080/notes?q=MILK&#39;
+[{&quot;id&quot;:1,&quot;title&quot;:&quot;Buy milk&quot;,&quot;text&quot;:&quot;2 litres&quot;}]
+
+$ curl -X POST http://127.0.0.1:8080/notes -d &#39;{&quot;text&quot;: &quot;x&quot;}&#39;
+{&quot;error&quot;:&quot;title is required&quot;}
+
+$ curl http://127.0.0.1:8080/notes/7
+{&quot;error&quot;:&quot;no note 7&quot;}
+
+$ curl -i -X PUT http://127.0.0.1:8080/notes/1
+HTTP/1.1 405 Method Not Allowed
+allow: GET, DELETE
+...
+
+$ curl -X DELETE -i http://127.0.0.1:8080/notes/1
+HTTP/1.1 204 No Content</code></pre><p>(The <code>-i</code> output is shortened here: Facil also sends <code>connection</code>, <code>date</code> and <code>last-modified</code> headers.)</p><p>The first request after start-up takes a few hundred milliseconds while Julia compiles your handler; later ones take microseconds. <a href="../../guide/deployment/">Deployment</a> shows how to remove that delay.</p><h2 id="9.-Test-it"><a class="docs-heading-anchor" href="#9.-Test-it">9. Test it</a><a id="9.-Test-it-1"></a><a class="docs-heading-anchor-permalink" href="#9.-Test-it" title="Permalink"></a></h2><p>Save this as <code>test_notes.jl</code> next to <code>notes.jl</code>:</p><pre><code class="language-julia hljs">using Test, Facil, JSON
+import Downloads
+
+include(joinpath(@__DIR__, &quot;tutorial_notes.jl&quot;))
+
+function call(server, method, target; body = nothing)
+    out = IOBuffer()
+    r = Downloads.request(&quot;http://127.0.0.1:$(port(server))$target&quot;; method, output = out,
+                          input = body === nothing ? nothing : IOBuffer(body), throw = false)
+    (status = r.status, headers = Dict(r.headers), body = String(take!(out)))
+end
+
+@testset &quot;notes API&quot; begin
+    server = serve!(app, 0)
+    try
+        r = call(server, &quot;POST&quot;, &quot;/notes&quot;; body = &quot;&quot;&quot;{&quot;title&quot;: &quot;Milk&quot;, &quot;text&quot;: &quot;2 litres&quot;}&quot;&quot;&quot;)
+        @test r.status == 201
+        @test r.headers[&quot;location&quot;] == &quot;/notes/1&quot;
+        @test JSON.parse(r.body)[&quot;title&quot;] == &quot;Milk&quot;
+
+        @test call(server, &quot;POST&quot;, &quot;/notes&quot;; body = &quot;{oops&quot;).status == 400
+        @test call(server, &quot;POST&quot;, &quot;/notes&quot;; body = &quot;&quot;&quot;{&quot;text&quot;: &quot;no title&quot;}&quot;&quot;&quot;).status == 422
+
+        r = call(server, &quot;GET&quot;, &quot;/notes?q=mi&quot;)
+        @test r.status == 200
+        @test length(JSON.parse(r.body)) == 1
+        @test isempty(JSON.parse(call(server, &quot;GET&quot;, &quot;/notes?q=bread&quot;).body))
+
+        @test call(server, &quot;GET&quot;, &quot;/notes/1&quot;).status == 200
+        @test call(server, &quot;GET&quot;, &quot;/notes/99&quot;).status == 404
+        @test call(server, &quot;PUT&quot;, &quot;/notes/1&quot;).headers[&quot;allow&quot;] == &quot;GET, DELETE&quot;
+        @test call(server, &quot;DELETE&quot;, &quot;/notes/1&quot;).status == 204
+        @test call(server, &quot;GET&quot;, &quot;/notes/1&quot;).status == 404
+    finally
+        close(server)
+    end
+end</code></pre><pre><code class="language-sh hljs">$ julia -t 4 --project=. test_notes.jl
+Test Summary: | Pass  Total  Time
+notes API     |   13     13  0.7s</code></pre><p>The pattern is the same for any Facil application:</p><ul><li><code>serve!(app, 0)</code> starts the real server on a free port, and <code>port(server)</code> tells you which. Never hard-code a port in a test.</li><li>A real HTTP client makes the requests. <code>Downloads</code> ships with Julia, so the test needs no extra dependency. Write <code>import Downloads</code>, not <code>using Downloads</code>: Downloads exports a <code>Response</code> type of its own, which would clash with Facil&#39;s.</li><li><code>close(server)</code> in a <code>finally</code> block stops the server even when a test fails.</li></ul><p><a href="../../guide/testing/">Testing</a> has more, including calling handlers directly without a server.</p><h2 id="Where-to-go-from-here"><a class="docs-heading-anchor" href="#Where-to-go-from-here">Where to go from here</a><a id="Where-to-go-from-here-1"></a><a class="docs-heading-anchor-permalink" href="#Where-to-go-from-here" title="Permalink"></a></h2><p>You now have every piece of a typical JSON service. To take it to production:</p><ul><li><a href="../../guide/deployment/">Deployment</a>: threads, a systemd unit, a container image, a reverse proxy, health checks, faster start-up.</li><li><a href="../../guide/shutdown/">Shutdown and signals</a>: finish requests in flight when the process is told to stop.</li><li><a href="../../guide/security/">Security</a>: limits, timeouts and HTTPS.</li><li><a href="../../guide/errors/">Errors and logging</a>: an access log and your own error pages.</li></ul><h2 id="tutorial-whole-file"><a class="docs-heading-anchor" href="#tutorial-whole-file">The whole file</a><a id="tutorial-whole-file-1"></a><a class="docs-heading-anchor-permalink" href="#tutorial-whole-file" title="Permalink"></a></h2><pre><code class="language-julia hljs">using Facil, JSON, URIs
+
+struct Note
+    id::Int
+    title::String
+    text::String
+end
+
+const NOTES = Dict{Int,Note}()
+const NOTES_LOCK = ReentrantLock()
+const NEXT_ID = Ref(1)
+
+const JSON_TYPE = [header.CONTENT_TYPE =&gt; &quot;application/json&quot;]
+
+json(status, data) = Response(status, JSON.json(data); headers = JSON_TYPE)
+problem(status, message) = json(status, (error = message,))
+
+function list_notes(req)
+    params = queryparams(something(query(uri(req)), &quot;&quot;))
+    q = lowercase(get(params, &quot;q&quot;, &quot;&quot;))
+    notes = lock(NOTES_LOCK) do
+        sort!([n for n in values(NOTES) if occursin(q, lowercase(n.title))]; by = n -&gt; n.id)
+    end
+    json(StatusCodes.OK, notes)
+end
+
+function create_note(req)
+    data = try
+        JSON.parse(body(req))
+    catch
+        return problem(StatusCodes.BAD_REQUEST, &quot;the body is not valid JSON&quot;)
+    end
+    data isa AbstractDict || return problem(StatusCodes.BAD_REQUEST, &quot;expected a JSON object&quot;)
+    title = get(data, &quot;title&quot;, nothing)
+    title isa AbstractString &amp;&amp; !isempty(title) ||
+        return problem(StatusCodes.UNPROCESSABLE_ENTITY, &quot;title is required&quot;)
+    text = get(data, &quot;text&quot;, &quot;&quot;)
+    text isa AbstractString || return problem(StatusCodes.UNPROCESSABLE_ENTITY, &quot;text must be a string&quot;)
+    note = lock(NOTES_LOCK) do
+        id = NEXT_ID[]
+        NEXT_ID[] += 1
+        NOTES[id] = Note(id, title, text)
+    end
+    Response(StatusCodes.CREATED, JSON.json(note);
+             headers = [header.CONTENT_TYPE =&gt; &quot;application/json&quot;, header.LOCATION =&gt; &quot;/notes/$(note.id)&quot;])
+end
+
+function get_note(id)
+    note = lock(() -&gt; get(NOTES, id, nothing), NOTES_LOCK)
+    note === nothing ? problem(StatusCodes.NOT_FOUND, &quot;no note $id&quot;) : json(StatusCodes.OK, note)
+end
+
+function delete_note(id)
+    found = lock(() -&gt; pop!(NOTES, id, nothing), NOTES_LOCK)
+    found === nothing ? problem(StatusCodes.NOT_FOUND, &quot;no note $id&quot;) : Response(StatusCodes.NO_CONTENT)
+end
+
+not_allowed(allow) = Response(StatusCodes.METHOD_NOT_ALLOWED, JSON.json((error = &quot;method not allowed&quot;,));
+                              headers = [header.CONTENT_TYPE =&gt; &quot;application/json&quot;, header.ALLOW =&gt; allow])
+
+function app(req)
+    m, p = method(req), path(uri(req))
+    if p == &quot;/notes&quot;
+        m == Methods.GET &amp;&amp; return list_notes(req)
+        m == Methods.POST &amp;&amp; return create_note(req)
+        return not_allowed(&quot;GET, POST&quot;)
+    end
+    found = match(r&quot;^/notes/(\d+)$&quot;, p)
+    if found !== nothing
+        id = parse(Int, found[1])
+        m == Methods.GET &amp;&amp; return get_note(id)
+        m == Methods.DELETE &amp;&amp; return delete_note(id)
+        return not_allowed(&quot;GET, DELETE&quot;)
+    end
+    p == &quot;/health&quot; &amp;&amp; return Response(StatusCodes.OK, &quot;ok&quot;)
+    problem(StatusCodes.NOT_FOUND, &quot;no such route&quot;)
+end
+
+if abspath(PROGRAM_FILE) == @__FILE__
+    serve(app, &quot;127.0.0.1&quot;, 8080; max_body_size = 64 * 1024)
+end</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../first-server/">« Your first server</a><a class="docs-footer-nextpage" href="../../guide/handlers/">Handlers and concurrency »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.20.0 on <span class="colophon-date" title="Thursday 26 November 2026 07:07">Thursday 26 November 2026</span>. Using Julia version 1.13.4.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
