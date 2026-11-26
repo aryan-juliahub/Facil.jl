@@ -80,6 +80,15 @@ First version. Nothing has been released or registered yet.
   - The error log limit is per error type and call site (innermost four
     frames), no longer per type alone.
   - `Facil.Timer` has a `show` method.
+- A client that writes its request and closes, or shuts down its write side,
+  at once is read and answered. Before, the connection was closed unread
+  whenever the client's FIN was already there at the first poll: the handler
+  did not run and no response was sent (3 of 200 such requests were handled
+  on macOS and on x86-64 Linux). Now every request that arrived is handled,
+  pipelined ones included; a client that only shut down its write side gets
+  the responses and then the connection is closed; for one that closed
+  completely the handler still runs and the response is dropped. The same
+  holds over TLS, and for WebSocket frames sent just before a close.
 - aarch64 Linux is tested in CI. There the brotli decoder of `brotli_jll`
   (every version from 1.0.9 to 1.2.1) rejects valid streams, also from a C
   program, while its encoder's output is byte-identical to other platforms.
@@ -108,13 +117,16 @@ First version. Nothing has been released or registered yet.
 
 ### C library
 
-- facil.io pinned at `51287473` with 21 patches (`deps/patches`): temp-file
+- facil.io pinned at `51287473` with 22 patches (`deps/patches`): temp-file
   cleanup, exact timers, gather-write send path, close races, TLS layer,
   HTTP robustness, file-descriptor capacity, request bodies, WebSocket fixes and
   controls, TLS write buffer, WebSocket performance, kqueue re-arm batching,
   epoll uuid events, a shared HTTP/1.1 read buffer, close-marker race, reactor
   thread wake-up, per-thread kqueues, the slow-reader guard for writes that
-  would block, HTTP conformance, and WebSocket shutdown.
+  would block, HTTP conformance, WebSocket shutdown, and half-closed clients.
+- Patch 22 (`half-close`): the poll loops read what a peer sent before its
+  FIN (or reset) instead of closing the connection unread; the C side of the
+  half-close fix listed under Server.
 - Patch 20 (`http-conformance`) and patch 21 (`websocket-shutdown`): the C
   side of the status line, bodyless status, request line, static file and
   WebSocket close fixes listed under Server.

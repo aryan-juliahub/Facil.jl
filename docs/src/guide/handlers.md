@@ -240,6 +240,15 @@ deadline of your own inside it. Streamed responses are different:
 [`ResponseStream`](@ref) reports a gone client through `isopen` and by
 throwing from `write`.
 
+A client may also finish sending and keep listening: it writes its request and
+shuts down its side of the connection, as `nc`, some health checkers and some
+proxies do. Facil reads and answers everything that arrived before the end of
+the client's stream, pipelined requests included, and then closes the
+connection. A client that writes a request and closes completely at once is
+read too: the handler runs and its response is dropped. Event streams and
+WebSockets treat the end of the client's stream as the client leaving, and so
+does a response streamed with `spawn = true` on a server with inline handlers.
+
 ## See also
 
 - [`serve!`](@ref) for the `inline` and `reactors` keywords.

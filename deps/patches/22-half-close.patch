@@ -1,0 +1,276 @@
+diff --git a/lib/facil/fio.c b/lib/facil/fio.c
+--- a/lib/facil/fio.c
++++ b/lib/facil/fio.c
+@@ -194,6 +194,8 @@
+   uint8_t open;
+   /** indicated that the connection should be closed. */
+   uint8_t close;
++  /** queued output is still sent after the peer finished sending */
++  uint8_t half_close;
+   /** peer address length */
+   uint8_t addr_len;
+   /** peer address length */
+@@ -1800,8 +1802,25 @@
+ 
+ 
+ ***************************************************************************** */
++/* The peer's stream ended (`hard`: with an error). What it sent before that
++ * is read first; a read hook may hold input even when the socket is drained,
++ * so its next read reports the end. Otherwise the connection is closed: after
++ * its queued output is sent when it allows half-close, else at once. */
++static inline void fio_peer_eof_in_poll(intptr_t uuid, int unread, int hard) {
++  const uint8_t closing = uuid_data(uuid).close;
++  const uint8_t plain = uuid_data(uuid).rw_hooks == &FIO_DEFAULT_RW_HOOKS;
++  if (!closing && (unread || !plain)) {
++    fio_defer_push_task(deferred_on_data, (void *)uuid, NULL);
++  } else if (!hard && plain && uuid_data(uuid).half_close) {
++    fio_close(uuid);
++  } else if (hard || plain || closing != 1) {
++    fio_force_close_in_poll(uuid);
++  }
++}
++
+ #if FIO_ENGINE_EPOLL
+ #include <sys/epoll.h>
++#include <sys/ioctl.h>
+ 
+ /**
+  * Returns a C string detailing the IO engine selected during compilation.
+@@ -1877,8 +1896,7 @@
+ }
+ 
+ static inline void fio_poll_add_write(intptr_t fd) {
+-  fio_poll_add2(fd, (EPOLLOUT | EPOLLRDHUP | EPOLLHUP | EPOLLONESHOT),
+-                evio_fd[2]);
++  fio_poll_add2(fd, (EPOLLOUT | EPOLLHUP | EPOLLONESHOT), evio_fd[2]);
+   return;
+ }
+ 
+@@ -1886,8 +1904,7 @@
+   if (fio_poll_add2(fd, (EPOLLIN | EPOLLRDHUP | EPOLLHUP | EPOLLONESHOT),
+                     evio_fd[1]) == -1)
+     return;
+-  fio_poll_add2(fd, (EPOLLOUT | EPOLLRDHUP | EPOLLHUP | EPOLLONESHOT),
+-                evio_fd[2]);
++  fio_poll_add2(fd, (EPOLLOUT | EPOLLHUP | EPOLLONESHOT), evio_fd[2]);
+   return;
+ }
+ 
+@@ -1916,15 +1933,22 @@
+         const intptr_t uuid = (intptr_t)events[i].data.u64;
+         if (!uuid_is_valid(uuid) || !uuid_data(uuid).open)
+           continue;
+-        if (events[i].events & (~(EPOLLIN | EPOLLOUT))) {
+-          // errors are hendled as disconnections (on_close)
+-          fio_force_close_in_poll(uuid);
++        const uint32_t ev = events[i].events;
++        if (ev & (~(EPOLLIN | EPOLLOUT))) {
++          int unread = 0;
++          if (internal[j].data.fd != evio_fd[1])
++            fio_force_close_in_poll(uuid);
++          else
++            fio_peer_eof_in_poll(
++                uuid,
++                !ioctl(fio_uuid2fd(uuid), FIONREAD, &unread) && unread > 0,
++                (ev & (~(EPOLLIN | EPOLLOUT | EPOLLRDHUP))) != 0);
+         } else {
+           // no error, then it's an active event(s)
+-          if (events[i].events & EPOLLOUT) {
++          if (ev & EPOLLOUT) {
+             fio_defer_push_urgent(deferred_on_ready, (void *)uuid, NULL);
+           }
+-          if (events[i].events & EPOLLIN)
++          if (ev & EPOLLIN)
+             fio_defer_push_task(deferred_on_data, (void *)uuid, NULL);
+         }
+       } // end for loop
+@@ -2370,7 +2394,12 @@
+     if (events[i].filter == EVFILT_WRITE) {
+       fio_defer_push_urgent(deferred_on_ready, ((void *)uuid), NULL);
+     } else if (events[i].filter == EVFILT_READ) {
+-      fio_defer_push_task(deferred_on_data, (void *)uuid, NULL);
++      if ((events[i].flags & (EV_EOF | EV_ERROR)) == EV_EOF) {
++        fio_peer_eof_in_poll(uuid, events[i].data > 0, events[i].fflags != 0);
++        continue;
++      } else {
++        fio_defer_push_task(deferred_on_data, (void *)uuid, NULL);
++      }
+     }
+     if (events[i].flags & (EV_EOF | EV_ERROR)) {
+       fio_force_close_in_poll(uuid);
+@@ -3574,7 +3603,9 @@
+  * Data might be available in the kernel's buffer while it is not available to
+  * be read using `fio_read` (i.e., when using a transport layer, such as TLS).
+  */
+-ssize_t fio_read(intptr_t uuid, void *buffer, size_t count) {
++ssize_t fio_read2(intptr_t uuid, void *buffer, size_t count, int *eof) {
++  if (eof)
++    *eof = 0;
+   if (!uuid_is_valid(uuid) || !uuid_data(uuid).open) {
+     errno = EBADF;
+     return -1;
+@@ -3594,10 +3625,14 @@
+   void *udata = uuid_data(uuid).rw_udata;
+   int old_errno = errno;
+   ssize_t ret;
++  /* a hook reports a clean end of the peer's stream as 0 with errno 0 */
++  const uint8_t plain = uuid_data(uuid).rw_hooks == &FIO_DEFAULT_RW_HOOKS;
++  const uint8_t half_close = uuid_data(uuid).half_close;
+ retry_int:
+   ret = rw_read(uuid, udata, buffer, count);
+   if (ret < 0 && errno == EINTR)
+     goto retry_int;
++  const uint8_t clean_eof = ret == 0 && (plain || errno == 0);
+   fio_unlock(&uuid_data(uuid).sock_lock);
+   if (ret > 0) {
+     fio_touch(uuid);
+@@ -3608,10 +3643,26 @@
+     errno = old_errno;
+     return 0;
+   }
+-  fio_force_close(uuid);
++  if (clean_eof && eof) {
++    *eof = 1;
++    return 0;
++  }
++  if (clean_eof && half_close)
++    fio_close(uuid);
++  else
++    fio_force_close(uuid);
+   return -1;
+ }
+ 
++ssize_t fio_read(intptr_t uuid, void *buffer, size_t count) {
++  return fio_read2(uuid, buffer, count, NULL);
++}
++
++void fio_half_close_set(intptr_t uuid, int allow) {
++  if (uuid_is_valid(uuid))
++    uuid_data(uuid).half_close = !!allow;
++}
++
+ /**
+  * `fio_write2_fn` is the actual function behind the macro `fio_write2`.
+  */
+@@ -4176,9 +4227,14 @@
+ 
+ flush_rw_hook:
+   flushed = uuid_data(uuid).rw_hooks->flush(uuid, uuid_data(uuid).rw_udata);
++  /* a close asked for while the lock was busy found nothing left to send */
++  const uint8_t closing = uuid_data(uuid).close == 1;
+   fio_unlock(&uuid_data(uuid).sock_lock);
+-  if (!flushed)
++  if (!flushed) {
++    if (closing)
++      goto closed;
+     return 0;
++  }
+   if (flushed < 0) {
+     goto test_errno;
+   }
+@@ -4414,6 +4470,8 @@
+   fio_protocol_s *old_pr = uuid_data(uuid).protocol;
+   uuid_data(uuid).open = 1;
+   uuid_data(uuid).protocol = protocol;
++  if (old_pr)
++    uuid_data(uuid).half_close = 0;
+   touchfd(fio_uuid2fd(uuid));
+   fio_unlock(&uuid_data(uuid).protocol_lock);
+   if (old_pr) {
+diff --git a/lib/facil/fio.h b/lib/facil/fio.h
+--- a/lib/facil/fio.h
++++ b/lib/facil/fio.h
+@@ -1135,6 +1135,20 @@
+  * be read using `fio_read` (i.e., when using a transport layer, such as TLS).
+  */
+ ssize_t fio_read(intptr_t uuid, void *buffer, size_t count);
++
++/**
++ * Like `fio_read`, but with `eof` given, a peer that finished sending (a FIN
++ * with nothing left to read) sets `*eof`, returns 0 and leaves the connection
++ * open; the caller closes it when it has nothing more to send.
++ */
++ssize_t fio_read2(intptr_t uuid, void *buffer, size_t count, int *eof);
++
++/**
++ * With `allow` set, a peer that finished sending is still written to: the
++ * connection closes once its queued output is sent, instead of at once with
++ * the output dropped. Attaching another protocol to the uuid clears it.
++ */
++void fio_half_close_set(intptr_t uuid, int allow);
+ 
+ /** The following structure is used for `fio_write2_fn` function arguments. */
+ typedef struct {
+diff --git a/lib/facil/http/http1.c b/lib/facil/http/http1.c
+--- a/lib/facil/http/http1.c
++++ b/lib/facil/http/http1.c
+@@ -35,6 +35,8 @@
+   uint8_t is_client;
+   uint8_t stop;
+   uint8_t answered; /* a response went out during the current parse */
++  uint8_t eof;      /* the client finished sending */
++  uint8_t again;    /* `on_data` was forced to go on with buffered requests */
+   /* the read buffer: none between requests, the thread's scratch buffer while
+    * `on_data` runs, or a heap block (`rown`) while unparsed bytes wait */
+   uint8_t *rbuf;
+@@ -1291,6 +1293,7 @@
+   }
+ 
+   if (!pipeline_limit) {
++    p->again = 1;
+     fio_force_event(uuid, FIO_EVENT_ON_DATA);
+   }
+   return;
+@@ -1335,15 +1338,22 @@
+     return;
+   }
+   ssize_t i = 0;
+-  if (p->rcap - p->buf_len)
+-    i = fio_read(uuid, p->rbuf + p->buf_len, p->rcap - p->buf_len);
++  int eof = 0;
++  if (!p->eof && p->rcap - p->buf_len)
++    i = fio_read2(uuid, p->rbuf + p->buf_len, p->rcap - p->buf_len, &eof);
+   if (i > 0) {
+     p->buf_len += i;
+     if (!p->head_start)
+       p->head_start = fio_last_tick().tv_sec;
+   }
++  p->eof |= eof;
++  p->again = 0;
+   http1_consume_data(uuid, p);
+   h1_after_consume(uuid, p);
++  /* A client that finished sending is answered for what it sent; the
++   * connection closes when no request is left running or buffered. */
++  if (p->eof && !p->stop && !p->again)
++    fio_close(uuid);
+ }
+ 
+ static void http1_on_data(intptr_t uuid, fio_protocol_s *protocol) {
+@@ -1450,7 +1460,11 @@
+     p->buf_len = unread_length;
+   }
+   http_s_new(&p->request, &p->p, &HTTP1_VTABLE);
++  /* set on both sides of the attach: it clears the flag of a replaced
++   * protocol, and events may arrive as soon as it returns */
++  fio_half_close_set(uuid, 1);
+   fio_attach(uuid, &p->p.protocol);
++  fio_half_close_set(uuid, 1);
+   if (unread_data && unread_length <= HTTP_MAX_HEADER_LENGTH) {
+     fio_force_event(uuid, FIO_EVENT_ON_DATA);
+   }
+diff --git a/lib/facil/tls/fio_tls_openssl.c b/lib/facil/tls/fio_tls_openssl.c
+--- a/lib/facil/tls/fio_tls_openssl.c
++++ b/lib/facil/tls/fio_tls_openssl.c
+@@ -900,8 +900,11 @@
+       fio_force_event(uuid, FIO_EVENT_ON_DATA);
+     return total;
+   }
+-  if (fio_tls_is_fatal(c, err))
++  if (fio_tls_is_fatal(c, err)) {
++    /* only a closing alert from the peer is a clean end of its stream */
++    errno = (err == SSL_ERROR_ZERO_RETURN) ? 0 : ECONNABORTED;
+     return 0; /* EOF */
++  }
+   errno = EWOULDBLOCK;
+   return -1;
+ }

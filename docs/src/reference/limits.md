@@ -78,7 +78,9 @@ The keyword limits are per server; see [Configuration](configuration.md).
 - **No disconnect detection during a handler, and no cancellation.** A client
   that goes away while its handler runs is not noticed; the handler finishes
   and the result is discarded. Streamed responses and event streams do notice
-  (`isopen`).
+  (`isopen`). A client that only shuts down its write side after its request
+  (a half-close) still gets its response; see
+  [A client that goes away](../guide/handlers.md#A-client-that-goes-away).
 - **Garbage collection pauses request handling.** A collection stops every
   thread, the reactor included. See
   [Performance tuning](../guide/performance.md) for sizes and remedies.

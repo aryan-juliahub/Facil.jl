@@ -19,3 +19,4 @@
 19-slow-reader-would-block.patch
 20-http-conformance.patch
 21-websocket-shutdown.patch
+22-half-close.patch

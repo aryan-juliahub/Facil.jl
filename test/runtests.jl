@@ -15,6 +15,7 @@ using Test
     include("pubsub.jl")
     include("compress.jl")
     include("tls.jl")
+    include("halfclose.jl")
     include("exit.jl")
     include("conn_scale.jl")
     include("gc.jl")

@@ -157,7 +157,7 @@ keyword throws an `ArgumentError` that names the closest valid one.
 | `src/reactor.jl`, `server.jl`, `async.jl` | Reactor lifecycle; `serve!` and the request callback; the task-handler worker pool. |
 | `src/body.jl`, `streaming.jl`, `sse.jl`, `websockets.jl`, `pubsub.jl`, `tls.jl`, `static.jl`, `compress.jl`, `timers.jl`, `signals.jl` | The features named. |
 | `deps/facil.io` | facil.io at commit `51287473`, unpacked by `deps/fetch_facil.sh`. Not in git (ignored). Never edited. |
-| `deps/patches/` | 21 patches, applied in the order of `series` by `apply.sh` to a copy. `README.md` has one row per patch. |
+| `deps/patches/` | 22 patches, applied in the order of `series` by `apply.sh` to a copy. `README.md` has one row per patch. |
 | `deps/shim/` | `fjl_*.c/h`: the C layer Julia calls (`fjl.h` holds `FJL_ABI`). |
 | `deps/build_local.jl` | Builds `deps/usr/lib/libfacil_julia.{dylib,so}` from the patched copy plus the shim. `src/libfjl.jl` includes it and runs it when Facil is precompiled. |
 | `deps/build_tarballs.jl`, `deps/yggdrasil/` | Packaging for a future `facil_julia_jll`. |
