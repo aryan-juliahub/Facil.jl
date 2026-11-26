@@ -26,6 +26,10 @@ function wait_pending_zero()
     true
 end
 
+# Shared CI VMs add milliseconds of wake-up jitter, so there the medians only
+# guard against gross lateness; locally they check the precision promised.
+const ON_CI = get(ENV, "CI", "") == "true"
+
 @testset "timers" begin
     @testset "Facil.sleep accuracy" begin
         F.sleep(0.001)
@@ -33,14 +37,12 @@ end
                            ("a spawned task", fetch(Threads.@spawn durations(0.001, 300))))
             println("Facil.sleep(1 ms) on $where: p50 ", round(pct(v, 0.5), digits = 3), " ms, p99 ",
                     round(pct(v, 0.99), digits = 3), " ms, min ", round(minimum(v), digits = 3), " ms")
-            # Medians allow for the wake-up jitter of shared CI VMs (up to 3 ms
-            # seen on macOS runners); a local machine stays well inside them.
             @test minimum(v) >= 1.0
-            @test pct(v, 0.5) < 2.0
+            @test pct(v, 0.5) < (ON_CI ? 4.0 : 1.5)
         end
         v = durations(0.01, 50)
         @test minimum(v) >= 10.0
-        @test pct(v, 0.5) < 14.0
+        @test pct(v, 0.5) < (ON_CI ? 25.0 : 11.0)
     end
 
     @testset "edge cases" begin
