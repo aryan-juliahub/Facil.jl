@@ -73,19 +73,22 @@ end
 
 const PROCESS_SHIM = """
 import Facil
+# One write per line, as Facil's own log does: a line printed in pieces can be
+# split by a log line from another thread, and its port would be missed.
+__mark(line) = (ccall(:write, Cssize_t, (Cint, Ptr{UInt8}, Csize_t), 2, line, sizeof(line)); nothing)
 function __start(f, args...; kw...)
     host = "127.0.0.1"
     for a in args
         a isa AbstractString && (host = String(a))
     end
     srv = Facil.serve!(f, host, 0; kw...)
-    println(stderr, "DOCEXAMPLE PORT ", Facil.port(srv)); flush(stderr)
+    __mark("DOCEXAMPLE PORT \$(Facil.port(srv))\n")
     srv
 end
 serve!(f, args...; kw...) = __start(f, args...; kw...)
 function serve(f, args...; kw...)
     srv = __start(f, args...; kw...)
-    println(stderr, "DOCEXAMPLE SERVING"); flush(stderr)
+    __mark("DOCEXAMPLE SERVING\n")
     Facil.foreground!(srv, 1)
     try
         wait(srv)

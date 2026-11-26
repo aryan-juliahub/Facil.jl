@@ -234,6 +234,12 @@ end
 
 Base.isopen(t::Timer) = @atomic t.open
 
+function Base.show(io::IO, t::Timer)
+    print(io, "Facil.Timer(")
+    t.interval > 0 && print(io, "every ", t.interval / 1e9, " s, ")
+    print(io, isopen(t) ? "open" : "closed", ")")
+end
+
 function Base.close(t::Timer)
     _, ok = @atomicreplace t.open true => false
     ok && timer_cancel(t.waker) && notify_waker(t.waker)

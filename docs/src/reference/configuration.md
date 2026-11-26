@@ -47,6 +47,8 @@ See [Limits](limits.md) and [Security](../guide/security.md).
 |:--|:--|:--|:--|
 | `compress` | `Bool` or [`CompressOptions`](@ref) | `false` | Compress responses with zstd, brotli or gzip according to `Accept-Encoding`. `true` is `CompressOptions()`. [Guide](../guide/compression.md) |
 | `public_folder` | `Nothing` or `AbstractString` | `nothing` | A directory served for `GET`, `HEAD` and `OPTIONS` before the handler is called; requests that match no file reach the handler. [Guide](../guide/static.md) |
+| `dotfiles` | `:serve` or `:deny` | `:serve` | `:deny`: `public_folder` does not serve a path with a part that starts with a dot (`.env`, `.git/config`); the request reaches the handler. [Guide](../guide/static.md#What-is-never-served,-and-what-you-can-turn-off) |
+| `symlinks` | `:follow` or `:inside` | `:follow` | `:inside`: `public_folder` does not serve a file that resolves to a place outside the folder; the request reaches the handler. [Guide](../guide/static.md#What-is-never-served,-and-what-you-can-turn-off) |
 
 ### HTTPS
 
@@ -58,12 +60,13 @@ See [Limits](limits.md) and [Security](../guide/security.md).
 
 | Keyword | Type | Default | Effect |
 |:--|:--|:--|:--|
-| `shutdown_grace` | `Real` ≥ 0 | `10` | Seconds that requests in flight get to finish when a process running `serve` receives SIGTERM. [Guide](../guide/shutdown.md) |
+| `shutdown_grace` | `Real` ≥ 0 | `10` | Seconds that requests in flight get to finish when a process running `serve` receives SIGTERM (or Ctrl-C in a script). [Guide](../guide/shutdown.md) |
 | `verbose` | `Bool` | `false` | Write a start-up line (address, threads, limits) and a line per request rejected by `before_body` or `body_in_memory` to stderr. [Guide](../guide/errors.md) |
 | `gc_headroom` | `Integer` ≥ 0 | `0` | Bytes of heap headroom; calls [`Facil.gc_headroom!`](@ref). **Process-wide**, only grows. [Guide](../guide/performance.md) |
 
-An out-of-range value throws `ArgumentError` when the server starts. An
-unknown keyword throws `MethodError`.
+An out-of-range value throws `ArgumentError` when the server starts. So does
+an unknown keyword; the message names the closest valid keyword and lists all
+of them.
 
 ## Positional arguments
 

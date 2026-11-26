@@ -129,11 +129,10 @@ All are optional keywords.
 - `on_close(ws)`: once, after the connection is gone. `send` no longer works.
 - `on_ready(ws)`: when output that had been queued has all been sent; use it to
   resume producing after [`Facil.pending_bytes`](@ref) grew.
-- `on_shutdown(ws)`: when the process exits normally while the connection is
-  open, just before Facil sends a `1001` close. The last chance to send. It is
-  not called when a server is closed with `close(server)` or drained on
-  SIGTERM: those end the connection without a close frame, and only
-  `on_close` runs.
+- `on_shutdown(ws)`: when the connection's server is closed or drained
+  ([`close(server)`](@ref Base.close(::Server)), SIGTERM under
+  [`serve`](@ref)), or the process exits, while the connection is open, just
+  before Facil sends a `1001` close. The last chance to send.
 
 # Keywords
 - `spawn::Bool = false`: where callbacks run.

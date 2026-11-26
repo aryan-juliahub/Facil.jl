@@ -38,6 +38,35 @@ function ServerOptions(; inline::Bool = false, reactors::Integer = 1,
                   body_in_memory, before_body, header_timeout, max_pending_output, shutdown_grace)
 end
 
+const SERVE_KEYWORDS = (fieldnames(ServerOptions)..., :tls, :public_folder, :dotfiles, :symlinks,
+                        :compress, :gc_headroom)
+
+function edit_distance(a::AbstractString, b::AbstractString)
+    x, y = collect(a), collect(b)
+    row = collect(0:length(y))
+    for i in eachindex(x)
+        prev, row[1] = row[1], i
+        for j in eachindex(y)
+            cur = min(row[j+1] + 1, row[j] + 1, prev + (x[i] != y[j]))
+            prev, row[j+1] = row[j+1], cur
+        end
+    end
+    row[end]
+end
+
+# Throws for a keyword that `serve!` does not take, naming the closest one.
+function check_keywords(kw)
+    for k in keys(kw)
+        k in SERVE_KEYWORDS && continue
+        name = string(k)
+        d, best = findmin(v -> edit_distance(name, string(v)), SERVE_KEYWORDS)
+        hint = d <= max(2, length(name) ÷ 3) ? "; did you mean `$(SERVE_KEYWORDS[best])`?" : "."
+        throw(ArgumentError("serve and serve! have no keyword `$name`$hint Valid keywords: " *
+                            join(sort!(collect(string.(SERVE_KEYWORDS))), ", ") * "."))
+    end
+    nothing
+end
+
 const OPEN, CLOSING, CLOSED = 0, 1, 2
 
 """
@@ -157,20 +186,20 @@ blocks until it has stopped.
     already queued for it is sent. A handler that is still running finishes,
     but its response is discarded.
   - `> 0`: stop listening, let each request in progress reply (the reply
-    closes its connection), close idle connections within about 2 seconds,
-    and close whatever is left after `grace` seconds. Other servers in the
+    closes its connection), close idle connections within about 2 seconds
+    and WebSockets at once, and close whatever is left after `grace` seconds. Other servers in the
     process are not affected.
 
 # Notes
 - Calling `close` again, or on a closed server, does nothing.
 - The reactor keeps running for the life of the process; closing a server
   closes only its listener and its connections.
-- WebSocket connections are closed without a close frame and their
-  `on_close` runs (`on_shutdown` does not). Streamed responses and event
-  streams are cut; their `isopen(io)` turns `false`. With `grace`, such
-  long-lived connections keep the server open until `grace` runs out.
-- [`serve`](@ref) calls `close` for you on Ctrl-C at the REPL, and drains
-  with `shutdown_grace` on SIGTERM.
+- Each WebSocket of the server gets its `on_shutdown` callback and a `1001`
+  close frame, then `on_close`; with `grace`, as soon as the drain starts.
+  Streamed responses and event streams are cut; their `isopen(io)` turns
+  `false`. With `grace`, they keep the server open until `grace` runs out.
+- [`serve`](@ref) calls `close` for you on Ctrl-C at the REPL, and
+  `close(server; grace = shutdown_grace)` on SIGTERM.
 
 # Examples
 ```jldoctest
@@ -338,15 +367,21 @@ Responses:
 - `public_folder::Union{Nothing,AbstractString} = nothing`: a directory whose
   files are served for `GET`, `HEAD` and `OPTIONS` before the handler is
   called; requests that match no file reach the handler. See [`sendfile`](@ref)
-  for the headers.
+  for the headers. A path with an encoded NUL (`%00`) gets a `400`.
+- `dotfiles::Symbol = :serve`: `:deny` does not serve a file whose path has a
+  part that starts with a dot (`.env`, `.git/config`); such a request reaches
+  the handler as if the file did not exist. Needs `public_folder`.
+- `symlinks::Symbol = :follow`: `:inside` does not serve a file that resolves,
+  through symbolic links, to a place outside `public_folder`; such a request
+  reaches the handler. Needs `public_folder`.
 
 HTTPS:
 - `tls = nothing`: a [`TLSConfig`](@ref) makes this an HTTPS server. Needs `reactors = 1`.
 
 Operation:
 - `shutdown_grace::Real = 10`: seconds [`serve`](@ref) gives requests in
-  progress when the process gets SIGTERM. See [`serve`](@ref) for which
-  handlers can use them.
+  progress when the process gets SIGTERM. See [`serve`](@ref) for what
+  differs on Julia 1.10 and 1.11.
 - `verbose::Bool = false`: write one line to stderr at start-up (address,
   threads, limits), one for each request that `before_body` rejects or that
   is over `body_in_memory`, and one when the server starts to drain.
@@ -357,20 +392,27 @@ The running [`Server`](@ref). The listener is bound when `serve!` returns, so a
 client may connect at once.
 
 # Throws
-- `ArgumentError`: a keyword out of range, `port` outside `0:65535`, a NUL in
-  `host`, `public_folder` that is not a directory, `tls` that is not a
+- `ArgumentError`: an unknown keyword (the message names the closest valid
+  one), a keyword out of range, `port` outside `0:65535`, a NUL in
+  `host`, `public_folder` that is not a directory, `dotfiles` or `symlinks`
+  with another value or without `public_folder`, `tls` that is not a
   `TLSConfig`, `tls` with `reactors > 1`, or `reactors` different from the
   reactor already running.
 - `SystemError`: the address could not be bound, for example
   `Address already in use` when another process holds the port.
-- `MethodError`: an unknown keyword.
 
 # What Facil does around the handler
 - A handler that throws, or returns anything not listed above, gives a `500`
   with the body `Internal Server Error`. The error and its stack trace are
-  written to stderr, at most once per error type every 10 seconds.
+  written to stderr, at most once per error type and call site every 10
+  seconds.
 - A request whose target or header names HttpTypes rejects gets a `400`
-  without reaching the handler. So does a request without a `Host` header.
+  without reaching the handler. So does a request without a `Host` header,
+  and one whose request line has a space inside the target.
+- The status line carries the status you return, with
+  `canonical_reason(status)` as its phrase, or `Unknown` when it has none.
+  A `1xx`, `204` or `304` response is sent without its body and without
+  `content-length`.
 - `content-length` (or chunked framing) is always set by Facil; a
   `content-length` or `transfer-encoding` you set is ignored. A non-empty body
   without `content-type` gets `text/plain; charset=utf-8` (a `String`) or
@@ -426,12 +468,14 @@ See also [`serve`](@ref), [`Server`](@ref), and the
 serve!(handler, port::Integer; kw...) = serve!(handler, "127.0.0.1", port; kw...)
 
 function serve!(handler, host::AbstractString = "127.0.0.1", port::Integer = 8080; tls = nothing,
-                public_folder::Union{Nothing,AbstractString} = nothing, compress = false,
-                gc_headroom::Integer = 0, kw...)
+                public_folder::Union{Nothing,AbstractString} = nothing, dotfiles::Symbol = :serve,
+                symlinks::Symbol = :follow, compress = false, gc_headroom::Integer = 0, kw...)
+    check_keywords(kw)
     opts = ServerOptions(; kw...)
     gc_headroom > 0 && gc_headroom!(gc_headroom)
     handler = wrap_handler(handler, compress_options(compress))
-    folder = static_folder(public_folder)
+    folder = static_folder(public_folder, symlinks)
+    folder_flags = static_flags(public_folder, dotfiles, symlinks)
     tls === nothing || check_tls_options(tls, opts)
     0 <= port <= 65535 || throw(ArgumentError("port must be in 0:65535"))
     h = String(host)
@@ -449,7 +493,8 @@ function serve!(handler, host::AbstractString = "127.0.0.1", port::Integer = 808
         lo = ListenOptions(ON_REQUEST[]; on_upgrade = ON_UPGRADE[], on_finish = ON_CLOSED[], udata = key,
                            max_header_size = opts.max_header_size, max_body_size = opts.max_body_size,
                            timeout = opts.timeout, log = false, tls = ctls,
-                           public_folder = folder === nothing ? Ptr{UInt8}(C_NULL) : pointer(folder))
+                           public_folder = folder === nothing ? Ptr{UInt8}(C_NULL) : pointer(folder),
+                           public_folder_flags = folder_flags)
         cs = GC.@preserve folder @ccall LIBFJL.fjl_http_server_new(Ref(lo)::Ptr{ListenOptions}, ON_RELEASE[]::Ptr{Cvoid})::Ptr{Cvoid}
         cs == C_NULL && (ctls == C_NULL || tls_free(ctls); error("Facil: could not allocate a server"))
         srv.cserver = cs
@@ -523,16 +568,19 @@ has more to do (tests, several servers, a REPL session).
 
 # Stopping
 - At the REPL, Ctrl-C closes the server and `serve` returns.
-- SIGTERM (`kill <pid>`, `systemctl stop`, `docker stop`) drains: the server
-  stops accepting, requests in progress get up to `shutdown_grace` seconds
-  (default 10), and the process exits with status 143. Julia prints its own
-  `signal 15: Terminated` report to stderr first; that is not an error.
-  Only handlers that are computing or waiting in [`Facil.sleep`](@ref) can
-  finish during this drain. Julia's event loop has stopped by then, so a
-  handler waiting on a socket, a file, a process or `Base.sleep` never
-  returns and its client is cut off when the grace period ends. To drain
-  those, call `close(server; grace)` yourself before the process is stopped;
-  see the [shutdown guide](@ref shutdown-guide).
+- SIGTERM (`kill <pid>`, `systemctl stop`, `docker stop`) drains: a task
+  calls `close(server; grace = shutdown_grace)` for every open server of the
+  process (default 10 seconds), and the process exits with status 143. Julia
+  prints its own `signal 15: Terminated` report to stderr first; that is not
+  an error.
+  On Julia 1.12 and later every handler can finish during the drain: the
+  first `serve` moves Julia's event loop to a thread of its own
+  (`Base.Experimental.make_io_thread`), because the thread that normally
+  runs it is the one a signal interrupts. Julia 1.10 and 1.11 cannot do
+  that: there a handler waiting on a socket, a file, a process or
+  `Base.sleep` never returns and its client is cut off when the grace period
+  ends. To drain those, call `close(server; grace)` yourself before the
+  process is stopped; see the [shutdown guide](@ref shutdown-guide).
 - In a script (`julia server.jl`), Ctrl-C ends the process the way Julia ends
   any script on SIGINT: Julia prints its `signal 2: Interrupt` report, then
   the same drain runs and the process exits.

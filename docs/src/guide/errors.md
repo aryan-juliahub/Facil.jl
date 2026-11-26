@@ -41,18 +41,18 @@ Facil writes its own messages straight to file descriptor 2 (stderr). They do
 not go through Julia's `Logging` system, so a custom logger does not see them
 and cannot format them. Every line starts with `Facil: `.
 
-**Errors are rate-limited by exception type.** The first error of a type
-(`ErrorException`, `KeyError`, ...) is logged with its stack trace. Further
-errors *of the same type* within the next 10 seconds are only counted, wherever
-they come from. The next one logged after that carries a note such as
-`(41 more like it in the last 10 s)`.
+**Errors are rate-limited by exception type and call site.** The first error
+of a type (`ErrorException`, `KeyError`, ...) thrown from a given place is
+logged with its stack trace. Further errors of the same type *from the same
+place* within the next 10 seconds are only counted. The next one logged after
+that carries a note such as `(41 more like it in the last 10 s)`.
 
-!!! warning "Different errors of one type hide each other"
-    The limit looks at the exception's type only, not its message or where it
-    was thrown. Two unrelated `error("...")` calls are both `ErrorException`s:
-    the second one within 10 seconds is not printed. In the example above the
-    three `/throw` requests produce one log entry. Do not rely on Facil's log to
-    see every failure; wrap your handler as shown below.
+"The same place" means the same innermost four frames of the stack trace, so
+two different `error("...")` calls are logged separately, and so is one
+function failing when called from two different places. In the example above
+the three `/throw` requests produce one log entry. The limit does not look at
+the message: do not rely on Facil's log to see every failure; wrap your
+handler as shown below.
 
 ## What each kind of callback does on error
 

@@ -22,8 +22,6 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - name: Install zlib headers
         run: sudo apt-get update && sudo apt-get install -y zlib1g-dev
       - uses: julia-actions/setup-julia@v2
@@ -33,7 +31,7 @@ jobs:
       - name: Build libfacil_julia
         run: |
           julia --project=. -e 'using Pkg; Pkg.instantiate()'
-          julia --project=. deps/build.jl
+          julia --project=. deps/build_local.jl
       - name: Install docs dependencies
         run: julia --project=docs -e 'using Pkg; Pkg.instantiate()'
       # Runs every program in docs/examples against a client and every doctest,

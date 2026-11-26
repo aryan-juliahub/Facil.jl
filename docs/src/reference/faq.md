@@ -27,10 +27,11 @@ A server you closed with `close(server)` frees its port as soon as
 
 ### `Facil: ... libfacil_julia ... is missing; build it with ...`
 
-The C library has not been built. Run
-`julia --project=Facil.jl Facil.jl/deps/build.jl` in the clone. See
-[Install](../getting-started/install.md), which also covers the other
-installation errors.
+The library file was removed after Facil was precompiled. Facil builds it
+when it is precompiled, so force that: `touch` the file `src/Facil.jl` of the
+package (or delete its folder under `~/.julia/compiled`) and load Facil
+again. See [Install](../getting-started/install.md), which also covers the
+other installation errors.
 
 ### `Facil.jl requires Linux or macOS`
 
@@ -68,12 +69,12 @@ details.
 
 ### Requests are cut off at shutdown although I set `shutdown_grace`
 
-The SIGTERM drain can only finish handlers that are computing or waiting in
-`Facil.sleep`. A handler that was waiting on a database, another service or
-`Base.sleep` when the signal arrived never completes, because Julia's event
-loop stops once the process starts to exit. Drain with
-`close(server; grace)` before the signal is sent, for example through a drain
-endpoint: [Draining handlers that do I/O](@ref shutdown-drain-io).
+On Julia 1.10 and 1.11 the SIGTERM drain cannot finish a handler that was
+waiting on a database, another service or `Base.sleep` when the signal
+arrived, because Julia's event loop stops once the process starts to exit.
+Use Julia 1.12 or later, where the drain finishes every handler, or drain
+with `close(server; grace)` before the signal is sent, for example through a
+drain endpoint: [Draining before the signal](@ref shutdown-drain-io).
 
 ### The process takes seconds to exit after SIGTERM
 
@@ -153,12 +154,16 @@ more.
 
 ## Responses
 
-### My handler returns status 418 (or 451, or 299) and the client sees 500
+### What reason phrase does an unusual status get?
 
-A known bug: facil.io writes `500 Internal Server Error` for status codes it
-has no reason phrase for. That is `418`, `451` and every unregistered code.
-Headers and body arrive as you set them. Use a neighbouring registered code
-until it is fixed. See [Limits](limits.md).
+Every status from 100 to 999 is sent with the number you returned. The reason
+phrase is `canonical_reason(status)` (`418 I'm a teapot`), or `Unknown` for a
+code without one (`299 Unknown`).
+
+### My 204 (or 304) response lost its body
+
+Those statuses, and `1xx`, cannot carry content, so Facil sends them without
+a body and without `content-length`, whatever the `Response` holds.
 
 ### `Response(404)` throws `ArgumentError`
 

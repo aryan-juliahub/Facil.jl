@@ -7,6 +7,7 @@ using Test
     include("async.jl")
     include("body.jl")
     include("robust.jl")
+    include("conformance.jl")
     include("static.jl")
     include("streaming.jl")
     include("sse.jl")

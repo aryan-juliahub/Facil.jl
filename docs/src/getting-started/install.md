@@ -1,7 +1,7 @@
 # [Install](@id install)
 
 This page gets Facil onto your machine and checks that it works. It takes
-about five minutes, most of it Julia precompiling.
+a few minutes, most of it Julia precompiling.
 
 ## What you need
 
@@ -10,42 +10,49 @@ about five minutes, most of it Julia precompiling.
 - **Linux or macOS.** On Windows, run Facil inside
   [WSL2](https://learn.microsoft.com/windows/wsl/install); see
   [Platform support](../reference/platforms.md).
-- **A C compiler** (`clang` or `gcc`) and **git**. Facil's C library is built
-  on your machine for now, because the prebuilt binary package is not
-  published yet. On Debian or Ubuntu also install the zlib headers:
-  `sudo apt-get install build-essential zlib1g-dev`. On macOS,
+- **A C compiler** (`clang` or `gcc`) and a network connection. Facil's C
+  library is built on your machine for now, because the prebuilt binary
+  package is not published yet. On Debian or Ubuntu also install the zlib
+  headers: `sudo apt-get install build-essential zlib1g-dev`. On macOS,
   `xcode-select --install` provides everything.
 
 !!! note "Facil is not in the General registry yet"
-    `Pkg.add("Facil")` does not work yet, and neither does
-    `Pkg.add(url = ...)`: the repository carries facil.io as a git submodule,
-    which Pkg cannot fetch. Until the package is registered, install from a
-    clone as shown here.
+    `Pkg.add("Facil")` does not work yet. Until the package is registered,
+    add it by URL as shown here.
 
-## 1. Clone and build
+## 1. Add Facil to your project
 
-```sh
-git clone --recurse-submodules https://github.com/aryan-juliahub/Facil.jl
-julia --project=Facil.jl -e 'using Pkg; Pkg.instantiate()'
-julia --project=Facil.jl Facil.jl/deps/build.jl
-```
-
-The last command compiles facil.io and Facil's C shim into
-`Facil.jl/deps/usr/lib/` and prints the path of the library it built. It takes
-a few seconds.
-
-If you forgot `--recurse-submodules`, run
-`git -C Facil.jl submodule update --init` and build again.
-
-## 2. Add Facil to your project
-
-Facil depends on HttpTypes, which lives in the same repository. From the
-directory of your own project, add both by path:
+Facil depends on HttpTypes, which lives in the same repository, so add both:
 
 ```sh
 mkdir myapp && cd myapp
-julia --project=. -e 'using Pkg; Pkg.develop([PackageSpec(path="../Facil.jl/lib/HttpTypes"), PackageSpec(path="../Facil.jl")])'
+julia --project=. -e 'using Pkg; Pkg.add([PackageSpec(url="https://github.com/aryan-juliahub/Facil.jl", subdir="lib/HttpTypes"), PackageSpec(url="https://github.com/aryan-juliahub/Facil.jl")])'
 ```
+
+On Julia 1.13 the short form is enough, because Pkg reads where HttpTypes
+lives from Facil's own project file:
+
+```sh
+julia --project=. -e 'using Pkg; Pkg.add(url="https://github.com/aryan-juliahub/Facil.jl")'
+```
+
+## 2. Let it build
+
+```sh
+julia --project=. -e 'using Facil'
+```
+
+The first time Facil is loaded, Julia precompiles it, and that step compiles
+the C library: it downloads the facil.io sources (a pinned commit, checked
+against a SHA-256), applies Facil's patches and compiles them with Facil's C
+shim. It prints a few `[facil build]` lines and takes under a minute. Later
+loads print nothing.
+
+!!! note "Working on Facil itself"
+    Clone the repository instead and use its own project:
+    `git clone https://github.com/aryan-juliahub/Facil.jl`, then
+    `julia --project=Facil.jl -e 'using Pkg; Pkg.instantiate(); using Facil'`.
+    `AGENTS.md` in the repository has the contributor workflow.
 
 ## 3. Check that it works
 
@@ -82,9 +89,9 @@ explains how to stop a server quietly.
 
 | Message | Cause and fix |
 |:--|:--|
-| `libfacil_julia... is missing; build it with ...` | Step 1's build did not run or failed. Run `julia --project=Facil.jl Facil.jl/deps/build.jl --verbose`. |
-| `cannot get submodules without a working tree` | You used `Pkg.add(url = ...)`. Clone the repository instead. |
-| `expected package HttpTypes to exist at path ...` | You ran `Pkg.build("Facil")` from your project. Build with `deps/build.jl` as in step 1. |
+| `[facil build] ... compile step(s) failed` while precompiling | The C compiler is missing or failed. Install one (see above), then run `using Facil` again. |
+| `checksum mismatch` or a download error while precompiling | The facil.io sources could not be fetched from GitHub. Check the network and run `using Facil` again. |
+| `Unsatisfiable requirements detected for package HttpTypes` | You used the short `Pkg.add(url = ...)` on Julia 1.10. Use the two-package command of step 1. |
 | `fatal error: 'zlib.h' file not found` | Install the zlib headers (`zlib1g-dev` on Debian and Ubuntu). |
 | `Facil.jl requires Linux or macOS` | You are on Windows outside WSL2. |
 | `Address already in use` | Another program holds port 8080. Pick another port, or see the [FAQ](../reference/faq.md). |

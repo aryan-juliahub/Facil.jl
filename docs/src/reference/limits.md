@@ -38,16 +38,17 @@ The keyword limits are per server; see [Configuration](configuration.md).
 - **Paths and query strings are not percent-decoded and not split.**
   `path(uri(req))` is what the client sent. Decode with URIs.jl
   ([Reading requests](../guide/requests.md)).
-- A request line with stray spaces (`GET /a b HTTP/1.1`) is not rejected: the
-  handler sees the target up to the first space and the connection is closed
-  after the response.
+- A request line must be `method SP target SP version`: one with a further
+  space (`GET /a b HTTP/1.1`) gets a `400`.
 
 ## Response behaviour to know about
 
-- **Status codes that facil.io does not know are sent as `500`.** That is
-  every unregistered code (`299`, `599`) and two registered ones: `418` and
-  `451`. Headers and body are sent as given; only the status line is wrong.
-  All other registered codes in `StatusCodes` are sent correctly.
+- **Every status from 100 to 999 is sent as given**, with HttpTypes'
+  `canonical_reason` as the reason phrase, or `Unknown` for a code that has
+  none (`299`, `599`).
+- **`1xx`, `204` and `304` responses are sent without a body** and without
+  `content-length` or a default `content-type`, even when the `Response` has
+  a body. Other headers are sent as set.
 - **`date`, `last-modified` and `connection` are added** to every
   non-streamed response that does not set them. `last-modified` is the time
   of the response, which tells caches the content just changed; set your own
@@ -81,12 +82,12 @@ The keyword limits are per server; see [Configuration](configuration.md).
 - **Garbage collection pauses request handling.** A collection stops every
   thread, the reactor included. See
   [Performance tuning](../guide/performance.md) for sizes and remedies.
-- **The SIGTERM drain does not finish handlers that are waiting on I/O.**
-  After the signal Julia's event loop no longer runs, so only handlers that
-  are computing or in `Facil.sleep` complete; a handler waiting on a socket,
-  a process or `Base.sleep` is lost after the grace period. Call
-  `close(server; grace)` before stopping the process. On Julia 1.10 the
-  SIGTERM drain is unreliable for all handlers. See
+- **On Julia 1.10 and 1.11 the SIGTERM drain does not finish handlers that
+  are waiting on I/O.** There Julia's event loop no longer runs after the
+  signal, so a handler waiting on a socket, a process or `Base.sleep` is lost
+  after the grace period, and on 1.10 other handlers are not reliable
+  either. Call `close(server; grace)` before stopping the process. Julia 1.12
+  and later drain every handler. See
   [Shutdown and signals](@ref shutdown-drain-io).
 - **Ctrl-C stops `serve` cleanly only at the REPL.** In a script Julia prints
   its interrupt report first; under `julia -e`, or with

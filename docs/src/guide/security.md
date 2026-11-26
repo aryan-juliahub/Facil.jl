@@ -100,10 +100,12 @@ With `public_folder`, Facil serves files below that directory.
 - A request path that contains `..` is never served from the folder. It is
   passed to your handler instead, with the path as sent, so your handler must
   not map paths to files naively either.
-- **Symbolic links are followed**, including links that point outside the
-  folder. Do not let untrusted users create links inside it.
-- Files whose names start with a dot are served like any other. Keep `.env`,
-  `.git` and similar out of the folder.
+- A path with an encoded NUL (`%00`) gets a `400`.
+- **Symbolic links are followed** by default, including links that point
+  outside the folder. `symlinks = :inside` refuses files that resolve outside
+  it.
+- Files whose names start with a dot are served by default. Keep `.env`,
+  `.git` and similar out of the folder, or pass `dotfiles = :deny`.
 - [`sendfile`](@ref)`(path)` sends exactly the path you give it. If any part of
   that path comes from the request, check it: reject `..`, absolute paths and
   NUL bytes, or look the name up in a list of known files.

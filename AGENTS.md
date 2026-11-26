@@ -16,14 +16,22 @@ pure-Julia port of the Rust `http` crate 1.5.0), which Facil re-exports.
 ## Setup
 
 Facil is not registered and has no prebuilt binary yet, so it needs a C compiler
-(`cc`, or set `CC`) and a local build. Linux and macOS only, Julia 1.10 or later.
-On Windows, run inside WSL2 (loading Facil natively stops with an error).
+(`cc`, or set `CC`): the first `using Facil` compiles the C library. Linux and
+macOS only, Julia 1.10 or later. On Windows, run inside WSL2 (loading Facil
+natively stops with an error).
+
+In an app's project (on Julia 1.13 `Pkg.add(url="https://github.com/aryan-juliahub/Facil.jl")` alone is enough):
 
 ```sh
-git clone --recurse-submodules https://github.com/aryan-juliahub/Facil.jl
+julia --project=. -e 'using Pkg; Pkg.add([PackageSpec(url="https://github.com/aryan-juliahub/Facil.jl", subdir="lib/HttpTypes"), PackageSpec(url="https://github.com/aryan-juliahub/Facil.jl")])'
+```
+
+To work in a clone of this repository:
+
+```sh
+git clone https://github.com/aryan-juliahub/Facil.jl
 cd Facil.jl
-julia --project -e 'using Pkg; Pkg.instantiate()'
-julia --project deps/build.jl
+julia --project -e 'using Pkg; Pkg.instantiate(); using Facil'
 ```
 
 ## Smallest server
@@ -47,7 +55,7 @@ port `0` picks a free port (`port(server)` tells which).
 | Input | `req::Request{String}`: `method(req)`, `uri(req)`, `headers(req)`, `body(req)` |
 | Output | a `Response` whose body is a `String`, `Vector{UInt8}` or `nothing`; or a plain `String` (sent as 200 `text/plain`) |
 | Also valid outputs | what `stream`, `sse`, `sendfile` and `websocket` return |
-| Throwing, or returning anything else | 500; logged to stderr once per error type every 10 s |
+| Throwing, or returning anything else | 500; logged to stderr once per error type and call site every 10 s |
 | Routing | none built in: branch on `method(req)` and `path(uri(req))` |
 | Query string | `query(uri(req))` is raw text or `nothing`; nothing is percent-decoded (use URIs.jl) |
 | Headers Facil sets | `content-length` always; `content-type` when a non-empty body has none (`text/plain; charset=utf-8` for strings, `application/octet-stream` for bytes) |
@@ -86,14 +94,15 @@ server = serve!(app, "127.0.0.1", 8080)
 | WebSocket | `Facil.is_upgrade(req)` then `websocket(req; on_open, on_message, on_close)` | Callbacks run on the reactor and must not block; `spawn = true` moves them to tasks. `send(ws, msg)` from any thread. |
 | Fan-out to WebSocket clients | `subscribe(ws, channel)`, `publish(channel, msg)` | No Julia code runs per message. Process-local. |
 | HTTPS | `tls = TLSConfig(cert, key; ...)` | Paths or PEM text, checked at construction. `reload!(server; cert, key)` rotates certificates live. |
-| Static files | `public_folder = dir`, or `sendfile(path)` from a handler | ETag, `last-modified`, conditional and single-range requests, `.gz` siblings. |
+| Static files | `public_folder = dir`, or `sendfile(path)` from a handler | ETag, `last-modified`, conditional and single-range requests, `.gz` siblings. `dotfiles = :deny` and `symlinks = :inside` restrict what `public_folder` serves. |
 | Compression | `compress = true` or `CompressOptions(...)` | zstd, brotli or gzip by `Accept-Encoding`; skips bodies under 1 KiB and non-text types. |
 | Short waits, timers | `Facil.sleep(s)`, `every(f, ms)`, `Facil.Timer(cb, delay; interval)` | Timed by a C timer thread. |
-| Shutdown | `close(server; grace = seconds)`, then `wait(server)` | Stops accepting, lets requests finish. `serve` does this on SIGTERM with `shutdown_grace` (10 s). |
+| Shutdown | `close(server; grace = seconds)`, then `wait(server)` | Stops accepting, lets requests finish, sends WebSockets a `1001` close. `serve` does this on SIGTERM with `shutdown_grace` (10 s). |
 
 All `serve!` keywords and their defaults are in the `serve!` docstring
 (`src/server.jl`): `max_header_size`, `max_body_size`, `timeout`,
-`header_timeout`, `max_pending_output`, `verbose`, `gc_headroom`.
+`header_timeout`, `max_pending_output`, `verbose`, `gc_headroom`. An unknown
+keyword throws an `ArgumentError` that names the closest valid one.
 
 ## Mistakes to avoid
 
@@ -120,16 +129,19 @@ All `serve!` keywords and their defaults are in the `serve!` docstring
 - **HTTP/1.1 only.** No HTTP/2, no router, no HTTP client, no cookie helpers, no
   worker processes. A `Host` header is required (400 without it).
 - **HTTP.jl handlers do not port unchanged;** see
-  [`docs/src/migrating_from_http_jl.md`](docs/src/migrating_from_http_jl.md).
+  [`docs/src/guide/from-http-jl.md`](docs/src/guide/from-http-jl.md).
 
 ## Where the full docs are
 
 | Topic | File |
 |---|---|
-| One page per feature, each with a tested example | [`docs/src/guide/`](docs/src/guide/) (`bodies`, `threads`, `streaming`, `sse`, `websockets`, `pubsub`, `tls`, `static`, `compression`, `shutdown`, `gc`, `routing`, `json`, `query`) |
-| HttpTypes names, Rust to Julia | [`docs/src/httptypes.md`](docs/src/httptypes.md) |
-| Limits and what is not included | [`docs/src/limits.md`](docs/src/limits.md) |
-| API reference (docstrings) | [`docs/src/api.md`](docs/src/api.md), or `?serve!` in the REPL |
+| Install, first server, tutorial | [`docs/src/getting-started/`](docs/src/getting-started/) |
+| One page per feature, each with a tested example | [`docs/src/guide/`](docs/src/guide/) (`handlers`, `requests`, `responses`, `bodies`, `routing`, `json`, `streaming`, `sse`, `websockets`, `pubsub`, `tls`, `static`, `compression`, `timers`, `errors`, `shutdown`, `security`, `performance`, `testing`, `deployment`, `from-http-jl`, `from-node`) |
+| HttpTypes names, Rust to Julia | [`docs/src/api/httptypes/`](docs/src/api/httptypes/index.md) |
+| Limits and what is not included | [`docs/src/reference/limits.md`](docs/src/reference/limits.md) |
+| Every keyword and its default | [`docs/src/reference/configuration.md`](docs/src/reference/configuration.md) |
+| API reference (docstrings) | [`docs/src/api/`](docs/src/api/index.md), or `?serve!` in the REPL |
+| The example programs the docs build runs | [`docs/examples/`](docs/examples/) (checks in `docs/examples/checks/`) |
 | Benchmark numbers | [`bench/scoreboard/RESULTS.md`](bench/scoreboard/RESULTS.md) |
 
 ---
@@ -144,10 +156,10 @@ All `serve!` keywords and their defaults are in the `serve!` docstring
 | `src/libfjl.jl` | Finds and loads the C library, ABI check, `@gcsafe_ccall`, C struct mirrors. |
 | `src/reactor.jl`, `server.jl`, `async.jl` | Reactor lifecycle; `serve!` and the request callback; the task-handler worker pool. |
 | `src/body.jl`, `streaming.jl`, `sse.jl`, `websockets.jl`, `pubsub.jl`, `tls.jl`, `static.jl`, `compress.jl`, `timers.jl`, `signals.jl` | The features named. |
-| `deps/facil.io` | Submodule pinned at `51287473`. Never edited. |
-| `deps/patches/` | 19 patches, applied in the order of `series` by `apply.sh` to a copy. `README.md` has one row per patch. |
+| `deps/facil.io` | facil.io at commit `51287473`, unpacked by `deps/fetch_facil.sh`. Not in git (ignored). Never edited. |
+| `deps/patches/` | 21 patches, applied in the order of `series` by `apply.sh` to a copy. `README.md` has one row per patch. |
 | `deps/shim/` | `fjl_*.c/h`: the C layer Julia calls (`fjl.h` holds `FJL_ABI`). |
-| `deps/build.jl` | Builds `deps/usr/lib/libfacil_julia.{dylib,so}` from the patched copy plus the shim. |
+| `deps/build_local.jl` | Builds `deps/usr/lib/libfacil_julia.{dylib,so}` from the patched copy plus the shim. `src/libfjl.jl` includes it and runs it when Facil is precompiled. |
 | `deps/build_tarballs.jl`, `deps/yggdrasil/` | Packaging for a future `facil_julia_jll`. |
 | `lib/HttpTypes/` | Separate package with its own `Project.toml` and tests. No dependencies; runs on Windows too. |
 | `test/*.jl` | Facil suite; `runtests.jl` lists the files. Real servers on fixed ports, checked with `curl` and Node clients. |
@@ -159,18 +171,26 @@ All `serve!` keywords and their defaults are in the `serve!` docstring
 ## Build the C library
 
 ```sh
-julia --project=. deps/build.jl             # no-op when inputs are unchanged
-julia --project=. deps/build.jl --force --verbose
+julia --project=. deps/build_local.jl             # no-op when inputs are unchanged
+julia --project=. deps/build_local.jl --force --verbose
 ```
 
-`build.jl` hashes the facil.io sources, `deps/patches/`, `deps/shim/`, itself,
-the compiler and the OpenSSL paths, and skips the build when the hash matches.
-Julia never rebuilds for you. Run it after:
+`build_local.jl` hashes the facil.io sources, `deps/patches/`, `deps/shim/`,
+itself, the compiler and the OpenSSL paths, and skips the build when the hash
+matches. It finds facil.io in `deps/facil.io` when `deps/fetch_facil.sh` put it
+there, and otherwise downloads the same pinned tarball into `deps/build/`.
 
-- editing anything in `deps/shim/` or `deps/patches/`, or moving the submodule;
-- switching Julia versions against the same checkout (the library links that
-  Julia's OpenSSL, so build again when you switch back);
-- a fresh clone.
+Precompiling Facil runs the same build, and the files in `deps/shim/` and
+`deps/patches/` are precompile dependencies, so after editing C the next
+`using Facil` rebuilds the library by itself. Run the script by hand to see
+compiler output (`--verbose`), or when you switch Julia versions against one
+checkout (the library links that Julia's OpenSSL; each version rebuilds it in
+place, so do not run two Julia versions against one checkout at once).
+
+The file is not named `deps/build.jl` on purpose: Pkg would run it through
+`Pkg.build`, whose sandbox fails on Julia 1.11 to 1.13 for a package with a
+`[sources]` path entry (HttpTypes here). The repository also has no git
+submodule, because `Pkg.add(url = ...)` cannot check out a tree that has one.
 
 If a shim change alters a struct or signature Julia mirrors, change both sides
 and bump `FJL_ABI` in `deps/shim/fjl.h` and `src/libfjl.jl` together; loading
@@ -182,7 +202,8 @@ hash of the loaded library. Needs zlib headers on Linux (`zlib1g-dev`).
 Never edit `deps/facil.io`. To change facil.io behaviour:
 
 1. `deps/patches/apply.sh /tmp/fio` gives a patched copy in `/tmp/fio/lib`
-   (it refuses an existing destination).
+   (it refuses an existing destination, and runs `deps/fetch_facil.sh` first
+   when `deps/facil.io` is missing).
 2. Copy it, edit the copy, and diff the two trees into
    `deps/patches/NN-short-name.patch` (`diff --git a/lib/facil/... b/lib/facil/...`,
    applied with `patch -p1`).
@@ -203,7 +224,7 @@ Add a new patch on top rather than rewriting an earlier one.
 | Patch suites, all | `test/patches/run.sh <scratch_dir>` | long |
 | Patch suites, some | `test/patches/run.sh <scratch_dir> robust upload ws tls fdreuse` | |
 | Hang check | `FDREUSE_RUNS=20 test/patches/run.sh <scratch_dir> fdreuse` | about 20 s for one run of each case |
-| Docs | `julia --project=docs docs/make.jl` | seconds; warnings are errors |
+| Docs | `julia -t 4 --project=docs docs/make.jl` | about 3 min; warnings are errors |
 | Linux box or container | `scripts/linux_smoke.sh --patches` | |
 
 - The tests need `curl`, `lsof` and `node` on `PATH`. Most files run alone as
@@ -214,15 +235,14 @@ Add a new patch on top rather than rewriting an earlier one.
 
   ```sh
   julia +1.10 --project=/tmp/ci110 -e 'using Pkg
-      Pkg.develop([PackageSpec(path="lib/HttpTypes"), PackageSpec(path=".")])
-      Pkg.build("Facil"; verbose=true)'
+      Pkg.develop([PackageSpec(path="lib/HttpTypes"), PackageSpec(path=".")])'
   julia +1.10 -t 4 --project=/tmp/ci110 -e 'using Pkg; Pkg.test("Facil")'
   ```
 
 - **Patch suites** build facil.io with `clang` and need OpenSSL 3 headers:
   set `OPENSSL` to a prefix containing `include/openssl` (on macOS the default
   in `test/patches/env.sh` is a path from the original machine). After
-  `deps/build.jl`, find one with
+  a build, find one with
   `find deps/build ~/.julia/artifacts -path '*/include/openssl/opensslv.h'`.
   Suites with Node clients read `NODE_MODULES` (default
   `bench/scoreboard/node/node_modules`, which `bench/scoreboard/build.sh` installs).
@@ -297,10 +317,10 @@ The scoreboard uses ports 3510 (Node) and 3520 (Facil) and kills only the
 servers it started. The target for every row is at least 1.0× the fastest Node
 option. A row under target is FAIL unless it carries an `exception` reason in
 `rows.json`; those **approved exceptions** are listed in
-[`docs/src/limits.md`](docs/src/limits.md). Only the maintainer approves a new
+[`docs/src/reference/limits.md`](docs/src/reference/limits.md). Only the maintainer approves a new
 exception: do not add one to make a row stop failing. After new results, update
 `RESULTS.md`, regenerate the charts with `chart.py`, and keep the README,
-`docs/src/benchmarks.md` and `docs/src/limits.md` in step. Details:
+`docs/src/reference/benchmarks.md` and `docs/src/reference/limits.md` in step. Details:
 [`bench/scoreboard/README.md`](bench/scoreboard/README.md).
 
 ## CI
@@ -333,8 +353,9 @@ limit allow a wrong result (a sleep ending early, a lost message).
   `CamelCase`, C shim symbols `fjl_*`, patch files `NN-short-name.patch`.
   HttpTypes keeps the Rust crate's names (`HeaderMap`, `as_str`, `StatusCodes.NOT_FOUND`).
 - **Public API** is what `src/Facil.jl` exports plus documented `Facil.name`
-  functions. Give every export a docstring and list it in `docs/src/api.md`;
-  the docs build fails on an exported docstring that no page includes.
+  functions. Give every export a docstring and list it on a page under
+  `docs/src/api/`; the docs build fails on an exported docstring that no page
+  includes.
 - **No new dependency without need.** Facil depends on HttpTypes, standard
   libraries, a few JLLs and three small packages; HttpTypes depends on nothing.
   HTTP.jl is not a dependency and must not become one.
@@ -364,8 +385,11 @@ limit allow a wrong result (a sleep ending early, a lost message).
   `fork()` a Julia process.
 - **Never route HTTP compression through Julia's bundled zlib.** It uses
   libdeflate, zlib-ng, zstd and brotli (JLLs), and runs on the handler's thread.
-- **Never edit the `deps/facil.io` submodule** or move its pin without
+- **Never edit `deps/facil.io`** or move the pinned commit (in
+  `deps/build_local.jl`, `deps/fetch_facil.sh` and the JLL recipe) without
   re-checking every patch.
+- **Never add a `deps/build.jl` or a git submodule:** either breaks
+  `Pkg.add(url = ...)`.
 - **Never call `http_resume`, or use an `http_s*`, from a Julia thread.**
 - **Never stop and restart the reactor** between servers.
 - **Never copy a response body "to be safe"** on the send path; the no-copy

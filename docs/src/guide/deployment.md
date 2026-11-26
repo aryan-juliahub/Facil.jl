@@ -69,12 +69,13 @@ Main.example("manual/notes.service")
   report to the journal on the way out; it is not an error. `TimeoutStopSec` must be longer than
   `shutdown_grace`, and `SuccessExitStatus=143` tells systemd that this exit
   is a clean stop.
-- **The SIGTERM drain cannot finish handlers that are waiting on I/O** (a
-  database, another service): see
-  [Draining handlers that do I/O](@ref shutdown-drain-io). If yours do, give
+- **On Julia 1.10 and 1.11 the SIGTERM drain cannot finish handlers that are
+  waiting on I/O** (a database, another service): see
+  [Draining before the signal](@ref shutdown-drain-io). There, give
   the service a drain endpoint and add
   `ExecStop=/usr/bin/curl -fsS -X POST -H "X-Drain-Token: ..." http://127.0.0.1:8080/admin/drain`
   to the unit, so that requests are drained before systemd sends the signal.
+  Julia 1.12 and later need none of this.
 - Facil writes its own messages (start-up line, handler errors) to stderr,
   which systemd sends to the journal: `journalctl -u notes`.
 - `LimitNOFILE` bounds the number of open connections; each one is a file
@@ -98,7 +99,8 @@ Main.example("manual/Dockerfile")
   container start-up.
 - For Kubernetes, point `livenessProbe` and `readinessProbe` at `/health`,
   set `terminationGracePeriodSeconds` above `shutdown_grace`, and call your
-  drain endpoint from a `preStop` hook if handlers do I/O.
+  drain endpoint from a `preStop` hook if handlers do I/O and Julia is older
+  than 1.12.
 
 This Dockerfile is not built by the documentation build.
 
@@ -141,9 +143,9 @@ This configuration is not executed by the documentation build.
   answer `503` from `/health` until then.
 - **Draining**: on SIGTERM the server stops accepting at once, so a load
   balancer sees connection refusals and moves on. Requests already in flight
-  finish only if their handlers are computing or in `Facil.sleep`; drain
-  I/O-bound services with `close(server; grace)` first
-  ([Shutdown and signals](@ref shutdown-drain-io)). For a load balancer that needs warning, fail `/health` first,
+  finish within `shutdown_grace` (on Julia 1.10 and 1.11 only if their
+  handlers are not waiting on I/O; drain those with `close(server; grace)`
+  first, see [Shutdown and signals](@ref shutdown-drain-io)). For a load balancer that needs warning, fail `/health` first,
   wait one check interval, then stop the process.
 - [`Facil.connections(server)`](@ref Facil.connections) and the other
   [counters](../api/tuning.md) make a metrics endpoint in a few lines.

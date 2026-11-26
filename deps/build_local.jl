@@ -1,10 +1,12 @@
 #!/usr/bin/env julia
 # Builds deps/usr/lib/libfacil_julia.{dylib,so} from facil.io (plus deps/patches,
 # when present) and deps/shim/*.c with the system C compiler.
-# Usage: julia --project=. deps/build.jl [--force] [--verbose]
-# When deps/ is read-only (an installed package) it builds into a scratchspace,
-# which src/libfjl.jl also looks in. Under Pkg.build it does nothing once
-# facil_julia_jll is a dependency, unless FACIL_JL_LOCAL_BUILD=1.
+# Usage: julia --project=. deps/build_local.jl [--force] [--verbose]
+# When deps/ is read-only it builds into a scratchspace instead.
+# src/libfjl.jl includes this file and calls build() when Facil is precompiled
+# without facil_julia_jll, so an installed package builds itself on first load.
+# It is not named build.jl: Pkg.build cannot run for a package whose
+# [sources] has a path entry (Julia 1.11 to 1.13).
 
 Sys.iswindows() && error("Facil.jl requires Linux or macOS (facil.io has no Windows support); on Windows use WSL2. HttpTypes.jl works on Windows.")
 
@@ -37,8 +39,10 @@ const LIBNAME = "libfacil_julia." * Libdl.dlext
 const LIBPATH = joinpath(LIBDIR, LIBNAME)
 const STAMP = LIBPATH * ".sha256"
 
-const FORCE = "--force" in ARGS
-const VERBOSE = "--verbose" in ARGS
+const AS_SCRIPT = abspath(PROGRAM_FILE) == abspath(@__FILE__)
+const FORCE = AS_SCRIPT && "--force" in ARGS
+const VERBOSE = AS_SCRIPT && "--verbose" in ARGS
+FACIL::String = ""
 
 # Headers matching Julia's OpenSSL 3; used only when no local artifact has them.
 const OPENSSL_HEADERS_VERSION = "3.5.9"
@@ -120,8 +124,8 @@ function openssl_include()
     download_headers()
 end
 
-# The facil.io checkout: the git submodule, or a verified GitHub tarball when the
-# package was installed without submodules.
+# The facil.io sources: deps/facil.io when deps/fetch_facil.sh put them there,
+# else a verified GitHub tarball unpacked in the build directory.
 function facil_source()
     sub = joinpath(DEPS, "facil.io")
     isfile(joinpath(sub, "lib", "facil", "fio.c")) && return sub
@@ -173,13 +177,17 @@ function compile_all(cc, jobs::Vector{Cmd})
     failed[] == 0 || error("$(failed[]) compile step(s) failed")
 end
 
+# The files whose content decides whether the library is rebuilt, besides facil.io.
+build_inputs() = vcat(files_under(PATCHES), files_under(SHIM), [@__FILE__])
+
 function build()
+    global FACIL = facil_source()
     cc = get(ENV, "CC", "cc")
     inc_ssl = openssl_include()
     libssl, libcrypto = OpenSSL_jll.libssl_path, OpenSSL_jll.libcrypto_path
     have_patches = isfile(joinpath(PATCHES, "apply.sh"))
 
-    inputs = vcat(files_under(joinpath(FACIL, "lib")), files_under(PATCHES), files_under(SHIM), [@__FILE__])
+    inputs = vcat(files_under(joinpath(FACIL, "lib")), build_inputs())
     ctx = SHA.SHA256_CTX()
     for f in inputs
         SHA.update!(ctx, codeunits(startswith(f, FACIL) ? joinpath("facil.io", relpath(f, FACIL)) : relpath(f, DEPS)))
@@ -189,7 +197,7 @@ function build()
     digest = bytes2hex(SHA.digest!(ctx))
 
     if !FORCE && isfile(LIBPATH) && isfile(STAMP) && readchomp(STAMP) == digest
-        log("up to date: ", LIBPATH)
+        AS_SCRIPT && log("up to date: ", LIBPATH)
         return LIBPATH
     end
 
@@ -223,7 +231,7 @@ function build()
     compile_all(cc, jobs)
 
     mkpath(LIBDIR)
-    tmp = LIBPATH * ".tmp"
+    tmp = LIBPATH * ".tmp$(getpid())"
     ldflags = ["-shared", "-Wl,-rpath," * dirname(libssl)]
     Sys.isapple() && push!(ldflags, "-Wl,-install_name,@rpath/$LIBNAME")
     run(`$cc $ldflags -o $tmp $objs $libssl $libcrypto -lz -lpthread -lm`)
@@ -233,15 +241,4 @@ function build()
     LIBPATH
 end
 
-function skip_for_jll()
-    haskey(get(PROJECT, "deps", Dict()), "facil_julia_jll") || return false
-    get(ENV, "FACIL_JL_LOCAL_BUILD", "") == "1" && return false
-    abspath(PROGRAM_FILE) != abspath(@__FILE__)
-end
-
-if skip_for_jll()
-    log("facil_julia_jll provides the library; set FACIL_JL_LOCAL_BUILD=1 to build locally")
-else
-    const FACIL = facil_source()
-    build()
-end
+AS_SCRIPT && build()

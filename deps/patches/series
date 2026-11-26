@@ -17,3 +17,5 @@
 17-reactor-thread-wake.patch
 18-kqueue-per-thread.patch
 19-slow-reader-would-block.patch
+20-http-conformance.patch
+21-websocket-shutdown.patch

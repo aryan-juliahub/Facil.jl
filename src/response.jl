@@ -85,6 +85,9 @@ body_bytes(b) = throw(ArgumentError("unsupported response body type $(typeof(b))
 default_type(::String) = TEXT_PLAIN
 default_type(::Vector{UInt8}) = OCTET_STREAM
 
+# Statuses that never carry content: a body given with one is not sent.
+bodyless(status::Integer) = status < 200 || status == 204 || status == 304
+
 """
     respond(h, res)
 
@@ -95,7 +98,7 @@ added for a non-empty body that has none); a plain string is a 200 `text/plain`.
     b = body_bytes(res.body)
     has_ct = write_headers(h, res.headers)
     status = Int(UInt16(res.status))
-    if b === nothing || sizeof(b) == 0
+    if b === nothing || sizeof(b) == 0 || bodyless(status)
         send_status(h, status)
     else
         has_ct || set_header(h, CT_ID, "content-type", default_type(b))
@@ -123,15 +126,31 @@ end
 Base.showerror(io::IO, e::BadHandlerResult) =
     print(io, "the handler returned a ", e.type, "; it must return a Response or a String")
 
-# The first error of each type is logged; repeats within ERROR_LOG_INTERVAL are counted and summarised.
+# The first error of each type from each call site is logged; repeats within
+# ERROR_LOG_INTERVAL are counted and summarised.
 const ERROR_LOG_INTERVAL = 10.0
-const ERROR_LOG = Dict{DataType,Tuple{Float64,Int}}()
+const ERROR_LOG_FRAMES = 4
+const ERROR_LOG_MAX = 1024
+const ERROR_LOG = Dict{UInt,Tuple{Float64,Int}}()
 const ERROR_LOG_LOCK = ReentrantLock()
 
+# The error's type and the innermost frames of its backtrace.
+function log_error_key(e, bt)
+    h = hash(typeof(e))
+    bt isa AbstractVector || return h
+    for i in 1:min(ERROR_LOG_FRAMES, length(bt))
+        h = hash(bt[i], h)
+    end
+    h
+end
+
+log_error_reset!() = lock(() -> empty!(ERROR_LOG), ERROR_LOG_LOCK)
+
 function log_error(where::AbstractString, e, bt)
-    t = typeof(e)
+    t = log_error_key(e, bt)
     now = time()
     suppressed = lock(ERROR_LOG_LOCK) do
+        length(ERROR_LOG) >= ERROR_LOG_MAX && !haskey(ERROR_LOG, t) && empty!(ERROR_LOG)
         last, n = get(ERROR_LOG, t, (-Inf, 0))
         if now - last >= ERROR_LOG_INTERVAL
             ERROR_LOG[t] = (now, 0)

@@ -21,15 +21,16 @@ void fjl_http_server_free(fjl_server_s *srv);
 /* Opens the listener on the reactor; call->result is its uuid or -1. */
 int fjl_http_listen_async(fjl_server_s *srv, const char *address,
                           const char *port, fjl_call_s *call);
-/* Closes the listener and every connection (pending output is flushed). */
+/* Closes the listener and every connection (pending output is flushed).
+ * WebSockets get their on_shutdown callback and a 1001 close first. */
 int fjl_http_close(fjl_server_s *srv);
 http_settings_s *fjl_http_settings(fjl_server_s *srv);
 /* Call before listening. A connection over `max_pending` unsent bytes whose
  * queue stops shrinking for about 3 s is dropped; 0 disables the cap. */
 void fjl_http_server_limits(fjl_server_s *srv, size_t max_pending);
 /* Graceful close: stops accepting, makes every later reply close its
- * connection and closes connections idle for `idle_secs`. fjl_http_close
- * ends whatever is left. */
+ * connection, closes connections idle for `idle_secs` and shuts WebSockets
+ * down (on_shutdown, 1001). fjl_http_close ends whatever is left. */
 int fjl_http_drain(fjl_server_s *srv, int idle_secs);
 size_t fjl_http_connections(fjl_server_s *srv);
 /* A free TCP port on `address` (0 when none could be found). */
@@ -61,7 +62,8 @@ const fjl_req_s *fjl_req_read(http_s *h);
 int fjl_resp_header(http_s *h, int32_t id, const char *name, size_t nlen,
                     const char *value, size_t vlen);
 /* Sends status, headers and body. A non-empty body goes out without a copy and
- * `dealloc(body)` runs exactly once when facil.io is done with it. */
+ * `dealloc(body)` runs exactly once when facil.io is done with it. A body
+ * given with a 1xx, 204 or 304 status is released unsent. */
 int fjl_resp_send(http_s *h, int status, const char *body, size_t len,
                   void (*dealloc)(void *));
 int fjl_resp_error(http_s *h, int status);

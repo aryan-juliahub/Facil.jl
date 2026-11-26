@@ -9,7 +9,7 @@ r = http(ex, "GET", "/bytes")
 r = http(ex, "GET", "/created")
 @test r.status == 201 && r.headers["location"] == "/things/1" && r.headers["x-request-id"] == "42"
 r = http(ex, "GET", "/empty")
-@test r.status == 204 && r.body == "" && !haskey(r.headers, "content-type") && r.headers["content-length"] == "0"
+@test r.status == 204 && r.body == "" && !haskey(r.headers, "content-type") && !haskey(r.headers, "content-length")
 r = http(ex, "GET", "/old")
 @test r.status == 301 && r.headers["location"] == "/text" && r.body == ""
 out = raw_request(ex, "GET /cookies HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")

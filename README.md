@@ -36,20 +36,22 @@ HTTP.jl is not a dependency.
 ## Install
 
 Facil is not registered yet, and the prebuilt C library (`facil_julia_jll`) is not
-published. Until then, installing needs git, a C compiler (`clang` or `gcc`) and a
-clone. `Pkg.add(url = ...)` does not work, because Pkg cannot fetch the facil.io
-submodule.
+published. Until then, installing needs a C compiler (`clang` or `gcc`): the first
+`using Facil` downloads the pinned facil.io sources and compiles the library.
+
+From your own project (Julia 1.10 or later):
 
 ```sh
-git clone --recurse-submodules https://github.com/aryan-juliahub/Facil.jl
-julia --project=Facil.jl -e 'using Pkg; Pkg.instantiate()'
-julia --project=Facil.jl Facil.jl/deps/build.jl
+julia --project=. -e 'using Pkg; Pkg.add([PackageSpec(url="https://github.com/aryan-juliahub/Facil.jl", subdir="lib/HttpTypes"), PackageSpec(url="https://github.com/aryan-juliahub/Facil.jl")])'
 ```
 
-Then, from your own project:
+On Julia 1.13, `Pkg.add(url="https://github.com/aryan-juliahub/Facil.jl")` alone is enough.
+
+To work on Facil itself, clone it:
 
 ```sh
-julia --project=. -e 'using Pkg; Pkg.develop([PackageSpec(path="../Facil.jl/lib/HttpTypes"), PackageSpec(path="../Facil.jl")])'
+git clone https://github.com/aryan-juliahub/Facil.jl
+julia --project=Facil.jl -e 'using Pkg; Pkg.instantiate(); using Facil'
 ```
 
 Julia 1.10 or later on Linux or macOS; CI tests Linux x86_64 and macOS (arm64 and
@@ -204,13 +206,13 @@ prototype Facil server and `autocannon -c 100 -w 4`: empty reply 236,422 against
 
 - HTTP/1.1 only. Linux and macOS only; on Windows use WSL2 (HttpTypes alone runs
   natively on Windows).
-- Not registered yet; installing needs a clone and a C compiler.
+- Not registered yet; installing is `Pkg.add` by URL and needs a C compiler.
 - No router, HTTP client, worker processes or Redis engine. HTTP.jl handlers need
   porting to HttpTypes.
 - facil.io limits: about 8 KiB per header line and 128 headers (431 above them);
   a `Host` header is required (400 without it).
-- Status codes facil.io has no reason phrase for (418, 451 and unregistered
-  codes) are sent as 500.
+- On Julia 1.10 and 1.11 the SIGTERM drain cannot finish handlers that wait on
+  I/O; Julia 1.12 and later drain every handler.
 - facil.io adds `date`, `last-modified` and `connection` when absent; Facil always
   sets `content-length`.
 - A client that disconnects while its handler runs is not noticed, and there is
@@ -248,6 +250,6 @@ Contributors and coding agents: start with [AGENTS.md](AGENTS.md).
 ## Licence
 
 - Facil.jl: MIT.
-- facil.io: MIT, Copyright (c) 2016-2019 Boaz Segev (`deps/facil.io/LICENSE`).
+- facil.io: MIT, Copyright (c) 2016-2019 Boaz Segev (text in `THIRD_PARTY_NOTICES.md`).
 - HttpTypes.jl: MIT or Apache-2.0, at your option, the same as the Rust `http`
   crate it is ported from (`lib/HttpTypes/LICENSE-MIT`, `lib/HttpTypes/LICENSE-APACHE`).

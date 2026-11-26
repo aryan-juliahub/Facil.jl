@@ -2,8 +2,8 @@ FROM julia:1.11-bookworm AS build
 RUN apt-get update && apt-get install -y --no-install-recommends git build-essential zlib1g-dev ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /opt
-RUN git clone --recurse-submodules --depth 1 https://github.com/aryan-juliahub/Facil.jl
-RUN julia --project=Facil.jl -e 'using Pkg; Pkg.instantiate()' && julia --project=Facil.jl Facil.jl/deps/build.jl
+RUN git clone --depth 1 https://github.com/aryan-juliahub/Facil.jl
+RUN julia --project=Facil.jl -e 'using Pkg; Pkg.instantiate(); using Facil'
 WORKDIR /srv/app
 COPY Project.toml server.jl ./
 RUN julia --project=. -e 'using Pkg; \

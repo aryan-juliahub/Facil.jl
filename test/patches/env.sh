@@ -2,7 +2,7 @@
 JULIA=${JULIA:-$(julia --startup-file=no -e 'print(joinpath(Sys.BINDIR, "julia"))')}
 JLIB=${JLIB:-$(dirname "$JULIA")/../lib/julia}
 # Prints a prefix whose include/ has OpenSSL headers of the version Julia's libcrypto
-# reports: an installed artifact, or the headers deps/build.jl downloaded.
+# reports: an installed artifact, or the headers deps/build_local.jl downloaded.
 find_openssl_prefix() {
   "$JULIA" --startup-file=no -e '
     using Libdl
@@ -25,7 +25,7 @@ find_openssl_prefix() {
     exit(1)' "$JLIB" "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 }
 OPENSSL=${OPENSSL:-$(find_openssl_prefix)} ||
-  { echo "no OpenSSL 3 headers found: run deps/build.jl, or set OPENSSL to a prefix with include/openssl" >&2; return 1 2>/dev/null || exit 1; }
+  { echo "no OpenSSL 3 headers found: run deps/build_local.jl, or set OPENSSL to a prefix with include/openssl" >&2; return 1 2>/dev/null || exit 1; }
 if [ "$(uname -s)" = Darwin ]; then
   ZLIB=${ZLIB:-$(xcrun --show-sdk-path)/usr/lib/libz.tbd}
   SSL_LIBS=("$JLIB/libssl.dylib" "$JLIB/libcrypto.dylib")

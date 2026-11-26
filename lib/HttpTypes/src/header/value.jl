@@ -300,6 +300,10 @@ Base.:(==)(a::HeaderValue, b::AbstractString) = getfield(a, :data) == b
 Base.:(==)(a::AbstractString, b::HeaderValue) = a == getfield(b, :data)
 Base.:(==)(a::HeaderValue, b::AbstractVector{UInt8}) = codeunits(a) == b
 Base.:(==)(a::AbstractVector{UInt8}, b::HeaderValue) = b == a
+# A value hashes as a `HeaderValue`, so it is never `isequal` to the string or
+# bytes it compares `==` to, and never the same `Dict` key.
+Base.isequal(::HeaderValue, ::Union{AbstractString,AbstractVector{UInt8}}) = false
+Base.isequal(::Union{AbstractString,AbstractVector{UInt8}}, ::HeaderValue) = false
 Base.isless(a::HeaderValue, b::HeaderValue) = isless(getfield(a, :data), getfield(b, :data))
 Base.isless(a::HeaderValue, b::AbstractString) = isless(getfield(a, :data), b)
 Base.isless(a::AbstractString, b::HeaderValue) = isless(a, getfield(b, :data))

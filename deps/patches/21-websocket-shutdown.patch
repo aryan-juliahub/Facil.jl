@@ -1,0 +1,47 @@
+diff --git a/lib/facil/http/websockets.c b/lib/facil/http/websockets.c
+--- a/lib/facil/http/websockets.c
++++ b/lib/facil/http/websockets.c
+@@ -531,6 +531,29 @@
+   return 0;
+ }
+ 
++static void shutdown_task(intptr_t uuid, fio_protocol_s *pr, void *others) {
++  if (pr->on_shutdown == on_shutdown)
++    on_shutdown(uuid, pr);
++  else if (!others)
++    return;
++  fio_close(uuid);
++}
++
++/* A connection without a protocol to lock is closed directly. */
++static void shutdown_fallback(intptr_t uuid, void *others) {
++  if (others)
++    fio_close(uuid);
++}
++
++/* A WebSocket gets its on_shutdown callback and a 1001 close, as when the
++ * reactor stops. Any other connection is closed when `close_others` is set
++ * and left alone otherwise. Safe from any thread. */
++void websocket_shutdown(intptr_t uuid, int close_others) {
++  fio_defer_io_task(uuid, .type = FIO_PR_LOCK_TASK, .task = shutdown_task,
++                    .udata = close_others ? (void *)1 : NULL,
++                    .fallback = shutdown_fallback);
++}
++
+ static void on_data(intptr_t sockfd, fio_protocol_s *ws_) {
+   ws_s *const ws = (ws_s *)ws_;
+   if (ws == NULL)
+diff --git a/lib/facil/http/websockets.h b/lib/facil/http/websockets.h
+--- a/lib/facil/http/websockets.h
++++ b/lib/facil/http/websockets.h
+@@ -23,6 +23,10 @@
+                        websocket_settings_s *args, void *data, size_t length,
+                        int deflate);
+ 
++/** Runs a WebSocket's `on_shutdown`, sends it a 1001 close and closes it.
++ * A connection that is not a WebSocket is closed when `close_others` is set
++ * and left alone otherwise. Safe from any thread. */
++void websocket_shutdown(intptr_t uuid, int close_others);
+ /** Closes with a status code (`websocket_close` sends 1000). */
+ void websocket_close2(ws_s *ws, uint16_t code);
+ /** As `websocket_close2`, with a reason (UTF-8, at most 123 bytes are sent). */

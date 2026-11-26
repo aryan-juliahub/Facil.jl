@@ -68,7 +68,8 @@ The [benchmarks](benchmarks.md) were measured on macOS only.
 
 Facil loads `libfacil_julia`, built from facil.io (pinned at a fixed commit,
 with the patches in `deps/patches`) and a small shim in `deps/shim`. Today it
-is compiled on your machine by `deps/build.jl`, which needs `clang` or `gcc`;
+is compiled on your machine the first time Facil is precompiled (by
+`deps/build_local.jl`), which needs `clang` or `gcc`;
 a prebuilt binary package (`facil_julia_jll`) is prepared but not published.
 OpenSSL, zstd, brotli, libdeflate and zlib-ng come from Julia's binary
 packages and need nothing from the system. The system's zlib is linked only

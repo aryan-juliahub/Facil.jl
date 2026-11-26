@@ -222,8 +222,8 @@ const _H_MAX_STANDARD_LEN = maximum(t -> sizeof(t[2]), STANDARD_HEADER_TABLE)
 The standard [`HeaderName`](@ref) with id `i`, its position in
 [`HttpTypes.STANDARD_HEADER_TABLE`](@ref). Not exported.
 
-`i` must be in `1:81`; it is not checked (an out-of-range id is undefined
-behaviour). Meant for parsers that have already matched a standard name.
+`i` must be in `1:81`; anything else throws a `BoundsError`. A parser that has
+already matched a standard name may skip the check with `@inbounds`.
 
 # Examples
 ```jldoctest
@@ -231,7 +231,7 @@ julia> HttpTypes.standard_header(1)
 hn"accept"
 ```
 """
-@inline standard_header(i::Integer) = @inbounds _H_STANDARD[i]
+Base.@propagate_inbounds standard_header(i::Integer) = _H_STANDARD[i]
 
 """
     HttpTypes.standard_index(name::HeaderName) -> Int
@@ -463,5 +463,9 @@ function Base.:(==)(a::HeaderName, b::StrLike)
     return GC.@preserve b s _h_lc_eq(_ptr(b), n, s, _H_CHARS)
 end
 Base.:(==)(a::StrLike, b::HeaderName) = b == a
+# `==` with a string ignores case, which no string hash can follow, so a name
+# and a string are never `isequal` and never the same `Dict` key.
+Base.isequal(::HeaderName, ::AbstractString) = false
+Base.isequal(::AbstractString, ::HeaderName) = false
 Base.hash(h::HeaderName, x::UInt) = hash(as_str(h), hash(:HeaderName, x))
 Base.isless(a::HeaderName, b::HeaderName) = isless(as_str(a), as_str(b))

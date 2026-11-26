@@ -12,7 +12,7 @@ that are produced over time have their own pages:
 |---|---|
 | a [`Response`](@ref) with a `String` body | that status, those headers, the string's bytes |
 | a `Response` with a `Vector{UInt8}` body | the same, with the bytes |
-| a `Response` with body `nothing` (or an empty body) | status and headers, `content-length: 0` |
+| a `Response` with body `nothing` (or an empty body) | status and headers, `content-length: 0` (no `content-length` for `1xx`, `204` and `304`) |
 | a `String` | `200 OK`, `text/plain; charset=utf-8` |
 | [`stream`](@ref)`(f, req)` | a body written piece by piece; see [Streaming responses](streaming.md) |
 | [`sse`](@ref)`(f, req)` | an event stream; see [Server-sent events](sse.md) |
@@ -71,19 +71,16 @@ res
 
 ## Status
 
-Facil sends the status code with its standard reason phrase.
+Facil sends the status code you return, whatever it is from 100 to 999, with
+its standard reason phrase: `canonical_reason(status)`, such as
+`418 I'm a teapot`. A code that has no standard phrase (299, 599) is sent as
+`299 Unknown`.
 
-!!! warning "Status codes facil.io does not know are sent as 500"
-    facil.io has a fixed table of status lines. A status outside it goes out as
-    `500 Internal Server Error`, with your headers and body unchanged. Of the
-    codes HttpTypes has constants for, this affects `StatusCodes.IM_A_TEAPOT`
-    (418) and `StatusCodes.UNAVAILABLE_FOR_LEGAL_REASONS` (451); it also
-    affects every unregistered code, such as 299 or 599. Check with a client
-    before you rely on an unusual code.
-
-Facil does not remove the body of a response that should not have one. A 204 or
-304 built with a body is sent with that body, which confuses clients: build
-those with `Response(StatusCodes.NO_CONTENT)`.
+`1xx`, `204` and `304` responses never carry content. Facil sends them
+without a body, without `content-length` and without a default
+`content-type`, even if the `Response` was built with a body; the headers you
+set (`etag`, `cache-control`, ...) are kept. Build them with
+`Response(StatusCodes.NO_CONTENT)`.
 
 Interim responses are not available to handlers: `100 Continue` is sent by
 Facil (see [Reading requests](requests.md)), and there is no way to send

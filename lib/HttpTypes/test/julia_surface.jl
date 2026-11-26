@@ -111,6 +111,14 @@ end
     @test string(header.ACCEPT) == "accept" && repr(header.ACCEPT) == "hn\"accept\""
     @test hash(HeaderName("X-A")) == hash(hn"x-a") && length(Set([hn"x-a", HeaderName("X-A")])) == 1
     @test_throws InvalidHeaderName HeaderName("bad name")
+    @test_throws BoundsError HttpTypes.standard_header(0)
+    @test_throws BoundsError HttpTypes.standard_header(82)
+    # Equal under isequal means equal hashes: `==` crosses types, isequal does not.
+    @test hn"x-a" == "X-A" && "x-a" == hn"x-a" && !isequal(hn"x-a", "x-a") && !isequal("x-a", hn"x-a")
+    @test hv"v" == "v" && hv"v" == b"v" && !isequal(hv"v", "v") && !isequal("v", hv"v") && !isequal(hv"v", b"v")
+    @test isequal(hn"x-a", HeaderName("X-A")) && isequal(hv"v", HeaderValue("v")) && hash(hv"v") == hash(HeaderValue("v"))
+    @test !haskey(Dict{Any,Int}("x-a" => 1), hn"x-a") && !("v" in Set{Any}([hv"v"])) && hv"v" in Any["v"]
+    @test length(unique(Any[hn"x-a", "x-a", hv"x-a"])) == 3
     @test sprint(showerror, InvalidHeaderName()) == "invalid HTTP header name"
 
     @test_throws InvalidHeaderValue HeaderValue("a\nb")

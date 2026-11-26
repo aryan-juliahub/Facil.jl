@@ -32,7 +32,7 @@ connection as a [`WebSocket`](@ref).
 | `on_open(ws)` | once, before any message |
 | `on_message(ws, msg)` | for each message: `msg` is a `String` for a text message, a `Vector{UInt8}` for a binary one |
 | `on_ready(ws)` | each time everything queued for the client has been written to the socket |
-| `on_shutdown(ws)` | when the process exits normally with the connection still open; a `1001` close follows |
+| `on_shutdown(ws)` | when its server closes or drains, or the process exits, with the connection still open; a `1001` close follows |
 | `on_close(ws)` | once, after the connection is gone |
 
 Fragmented messages are joined before `on_message` runs. Ping and pong frames
@@ -41,12 +41,13 @@ are handled for you.
 A callback that throws is logged to stderr (see [Errors and logging](errors.md))
 and the connection stays open.
 
-!!! warning "on_shutdown does not run when you close the server"
-    `on_shutdown` runs when the reactor stops at a normal process exit.
-    `close(server)`, `close(server; grace)` and the SIGTERM drain close
-    WebSocket connections without calling it and without a close frame: the
-    client sees the connection drop, and only `on_close` runs. To say goodbye
-    first, close your connections yourself before closing the server (see
+!!! note "What a closing server does to WebSockets"
+    `close(server)`, `close(server; grace)` and the drain on SIGTERM call
+    `on_shutdown` for each of that server's open WebSockets, send the client a
+    `1001` (going away) close frame and close the connection; `on_close` runs
+    last. `on_shutdown` is the last chance to `send`. With `spawn = true` the
+    callback runs on a task and may start after the close frame has gone out,
+    so a message it sends can be lost (see
     [Shutting down](shutdown.md#Long-lived-connections)).
 
 ## Where callbacks run

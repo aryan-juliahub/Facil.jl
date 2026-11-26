@@ -59,15 +59,54 @@ end
 
 # ---- SIGTERM
 
-# Julia answers SIGTERM by exiting through its atexit hooks (exit code 128 there).
-# For `serve` in the foreground that hook drains every server first. It runs with
-# garbage collection off and must not yield, so it waits in GC-safe sleeps.
+# Julia answers SIGTERM (and Ctrl-C in a script) by interrupting thread 1 and
+# running the atexit hooks there (exit code 128), wherever that thread was.
+# The hook hands the drain to WATCHER, a task on another thread, and waits.
 const FOREGROUND = Threads.Atomic{Int}(0)
 const EXIT_HOOK = Threads.Atomic{Bool}(false)
+const EXIT_STUCK = Threads.Atomic{Bool}(false)
+const WATCH = Ref{Base.AsyncCondition}()
+const WATCHING = Threads.Atomic{Bool}(false)
+const DRAIN_IDLE, DRAIN_RUNNING, DRAIN_DONE = 0, 1, 2
+const DRAIN = Threads.Atomic{Int}(DRAIN_IDLE)
+const WATCHER_ACK_MS = 500
 
 function foreground!(@nospecialize(srv::Server), d::Int)
     Threads.atomic_add!(FOREGROUND, d)
-    d > 0 && !Threads.atomic_xchg!(EXIT_HOOK, true) && atexit(drain_at_exit)
+    if d > 0 && !Threads.atomic_xchg!(EXIT_HOOK, true)
+        atexit(drain_at_exit)
+        start_watcher()
+    end
+    nothing
+end
+
+# Thread 1 runs Julia's event loop and is the thread a signal interrupts, so
+# the loop moves to a thread of its own; tasks waiting on I/O then keep
+# running while the process drains. The watcher needs a second Julia thread.
+function start_watcher()
+    isdefined(Base.Experimental, :make_io_thread) || return nothing
+    Base.Experimental.make_io_thread()
+    Threads.nthreads() > 1 || return nothing
+    WATCH[] = Base.AsyncCondition()
+    WATCHING[] = true
+    Threads.@spawn :default watch_signal()
+    nothing
+end
+
+function watch_signal()
+    try
+        wait(WATCH[])
+        Threads.atomic_cas!(DRAIN, DRAIN_IDLE, DRAIN_RUNNING) == DRAIN_IDLE || return nothing
+        servers = lock(() -> Server[s for s in values(LIVE) if isopen(s)], LIVE_LOCK)
+        any(s -> s.options.verbose, servers) && !isempty(servers) &&
+            log_line("signal received; closing $(length(servers)) server(s), up to $(maximum(s -> s.options.shutdown_grace, servers)) s for open requests")
+        foreach(s -> close(s; grace = s.options.shutdown_grace), servers)
+        foreach(wait, servers)
+    catch e
+        callback_error("draining on a signal", e, catch_backtrace())
+    finally
+        DRAIN[] = DRAIN_DONE
+    end
     nothing
 end
 
@@ -87,21 +126,41 @@ function live_servers()
     Server[]
 end
 
+# True when the watcher task took the drain and finished it within `limit` s.
+function drain_by_watcher(limit::Real)
+    WATCHING[] || return false
+    ccall(:uv_async_send, Cint, (Ptr{Cvoid},), WATCH[].handle)
+    for _ in 1:(WATCHER_ACK_MS ÷ 10)
+        DRAIN[] == DRAIN_IDLE || break
+        sleep_gcsafe(10)
+    end
+    Threads.atomic_cas!(DRAIN, DRAIN_IDLE, DRAIN_DONE) == DRAIN_IDLE && return false
+    deadline = time() + limit
+    while time() < deadline && DRAIN[] != DRAIN_DONE
+        sleep_gcsafe(10)
+    end
+    DRAIN[] == DRAIN_DONE
+end
+
+# Runs on the interrupted thread: it must not yield, so it waits in GC-safe sleeps.
 function drain_at_exit(code::Integer)
     try
         (code == 128 && FOREGROUND[] > 0 && fjl_is_running() && !fjl_on_reactor()) || return nothing
-        servers = filter(s -> (@atomic s.state) == OPEN, live_servers())
+        servers = filter(s -> (@atomic s.state) != CLOSED, live_servers())
         isempty(servers) && return nothing
         grace = maximum(s -> s.options.shutdown_grace, servers)
-        any(s -> s.options.verbose, servers) &&
-            log_line("signal received; closing $(length(servers)) server(s), up to $(grace) s for open requests")
-        for s in servers
-            _, ok = @atomicreplace s.state OPEN => CLOSING
-            ok && drain_start(s)
-        end
-        deadline = time() + grace
-        while time() < deadline && any(s -> (@atomic s.state) != CLOSED, servers)
-            sleep_gcsafe(20)
+        if !drain_by_watcher(grace + 1)
+            open = filter(s -> (@atomic s.state) == OPEN, servers)
+            any(s -> s.options.verbose, open) &&
+                log_line("signal received; closing $(length(open)) server(s), up to $(grace) s for open requests")
+            for s in open
+                _, ok = @atomicreplace s.state OPEN => CLOSING
+                ok && drain_start(s)
+            end
+            deadline = time() + grace
+            while time() < deadline && any(s -> (@atomic s.state) != CLOSED, servers)
+                sleep_gcsafe(20)
+            end
         end
         for s in servers
             (@atomic s.state) == CLOSED || @ccall LIBFJL.fjl_http_close(s.cserver::Ptr{Cvoid})::Cint
@@ -110,6 +169,8 @@ function drain_at_exit(code::Integer)
         while time() < t && any(s -> (@atomic s.state) != CLOSED, servers)
             sleep_gcsafe(10)
         end
+        # A handler that never returned holds its reactor thread: do not join it.
+        any(s -> (@atomic s.state) != CLOSED, servers) && (EXIT_STUCK[] = true)
     catch e
         callback_error("draining at exit", e, catch_backtrace())
     end

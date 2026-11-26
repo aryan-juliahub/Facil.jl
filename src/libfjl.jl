@@ -11,35 +11,39 @@ const HAVE_JLL = Base.identify_package(@__MODULE__, "facil_julia_jll") !== nothi
     import facil_julia_jll
 end
 
-# Where deps/build.jl writes: next to the package when deps/ is writable, else a scratchspace.
-function local_build_target()
-    try
-        probe = joinpath(dirname(@__DIR__), "deps", ".write-probe-$(getpid())")
-        touch(probe)
-        rm(probe)
-        return LOCAL_LIB
-    catch
-        return SCRATCH_LIB
-    end
+# The build script, included here so that it loads its packages as Facil's own.
+module LocalBuild
+include(joinpath(dirname(@__DIR__), "deps", "build_local.jl"))
 end
 
-# Resolved once per precompile: the `libfacil_path` preference, then an existing local
-# build, then facil_julia_jll, then wherever deps/build.jl would put a local build.
+# facil_julia_jll's library, or nothing on a platform it has no binary for.
+function jll_library()
+    @static if HAVE_JLL
+        facil_julia_jll.is_available() && return facil_julia_jll.libfacil_julia
+    end
+    nothing
+end
+
+# Resolved once per precompile: the `libfacil_path` preference; with
+# facil_julia_jll, an existing local build and then the JLL's library;
+# otherwise a local build, compiled now unless it is up to date.
 function resolve_libfjl()
     pref = @load_preference("libfacil_path", nothing)
     pref === nothing || return String(pref)
-    for f in (LOCAL_LIB, SCRATCH_LIB)
-        isfile(f) && return f
+    if HAVE_JLL && get(ENV, "FACIL_JL_LOCAL_BUILD", "") != "1"
+        for f in (LOCAL_LIB, SCRATCH_LIB)
+            isfile(f) && return f
+        end
+        jll = jll_library()
+        jll === nothing || return jll
     end
-    @static if HAVE_JLL
-        get(ENV, "FACIL_JL_LOCAL_BUILD", "") == "1" || return facil_julia_jll.libfacil_julia
-    end
-    local_build_target()
+    LocalBuild.build()
 end
 
 const LIBFJL = resolve_libfjl()
 LIBFJL isa AbstractString && isfile(LIBFJL) && include_dependency(LIBFJL)
-const FJL_ABI = 1
+foreach(include_dependency, LocalBuild.build_inputs())
+const FJL_ABI = 2
 
 const libfjl_handle = Ref{Ptr{Cvoid}}(C_NULL)
 
@@ -47,7 +51,7 @@ libfjl_missing() = LIBFJL isa AbstractString && isabspath(LIBFJL) && !isfile(LIB
 
 function load_libfjl()
     Sys.iswindows() && error(UNSUPPORTED_OS)
-    build = joinpath(dirname(@__DIR__), "deps", "build.jl")
+    build = joinpath(dirname(@__DIR__), "deps", "build_local.jl")
     libfjl_missing() && error("Facil: $(LIBFJL) is missing; build it with `julia --project=$(dirname(@__DIR__)) $build`, or set the `libfacil_path` preference")
     libfjl_handle[] = Libdl.dlopen(LIBFJL, Libdl.RTLD_NOW | Libdl.RTLD_GLOBAL)
     abi = @ccall LIBFJL.fjl_abi()::Cint
@@ -155,13 +159,16 @@ struct ListenOptions
     timeout::UInt8
     ws_timeout::UInt8
     log::UInt8
+    public_folder_flags::UInt8
 end
 
 ListenOptions(on_request::Ptr{Cvoid}; on_upgrade=C_NULL, on_finish=C_NULL, udata=C_NULL,
               public_folder=C_NULL, max_header_size=0, max_body_size=0, max_clients=0,
-              tls=C_NULL, ws_max_msg_size=0, timeout=0, ws_timeout=0, log=false) =
+              tls=C_NULL, ws_max_msg_size=0, timeout=0, ws_timeout=0, log=false,
+              public_folder_flags=0) =
     ListenOptions(on_request, on_upgrade, on_finish, udata, public_folder, max_header_size,
-                  max_body_size, max_clients, tls, ws_max_msg_size, timeout, ws_timeout, log)
+                  max_body_size, max_clients, tls, ws_max_msg_size, timeout, ws_timeout, log,
+                  public_folder_flags)
 
 """
     fjl_listen(address, port, opts) -> Int

@@ -7,7 +7,7 @@
 #include <stdint.h>
 
 #define FJL_VERSION "0.1.0"
-#define FJL_ABI 1
+#define FJL_ABI 2
 
 #ifndef FJL_BUILD_ID
 #define FJL_BUILD_ID "unknown"
@@ -68,6 +68,7 @@ typedef struct {
   uint8_t timeout;
   uint8_t ws_timeout;
   uint8_t log;
+  uint8_t public_folder_flags; /* HTTP_PUBLIC_* */
 } fjl_listen_s;
 
 /* Opens a listener on the reactor; call->result is its uuid, or -1 with

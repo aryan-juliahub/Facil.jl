@@ -55,14 +55,30 @@ directory Julia was started in; a directory that does not exist throws an
 `ArgumentError` there.
 
 !!! warning "Everything in the folder is public"
-    - Paths containing `..` are never served from the folder; they reach your
-      handler, with the `..` still in `path(uri(req))`.
-    - **Dotfiles are served**: `public/.env` answers `/.env`.
-    - **Symbolic links are followed**, also out of the folder. A link inside
-      `public` to a file or directory elsewhere publishes that target.
+    By default dotfiles are served (`public/.env` answers `/.env`) and
+    symbolic links are followed, also out of the folder. Put only files meant
+    for the world in the folder, and do not point it at a project root or a
+    directory that holds uploads you have not vetted.
 
-    Put only files meant for the world in the folder, and do not point it at a
-    project root or a directory that holds uploads you have not vetted.
+## What is never served, and what you can turn off
+
+| Request path | Result |
+|---|---|
+| contains `..` as a path part, or `//` (also when percent-encoded) | never served from the folder; reaches your handler, with the path as sent |
+| contains an encoded NUL (`%00`) | `400 Bad Request`; the handler is not called |
+| has a part that starts with a dot (`/.env`, `/.git/config`) | served by default; with `dotfiles = :deny` it reaches your handler as if the file did not exist |
+| names a symbolic link, or goes through one | followed by default; with `symlinks = :inside` a file that resolves to a place outside the folder reaches your handler instead |
+
+```julia
+serve!(app, 8080; public_folder = "public", dotfiles = :deny, symlinks = :inside)
+```
+
+The defaults are those of nginx, which serves dotfiles and follows links
+(Node's `serve-static` follows links too, but ignores dotfiles). A folder you
+fully control needs neither option. Turn both on when other people or tools
+can put files into the folder. With `symlinks = :inside`, links that stay
+inside the folder still work, and the folder itself may be reached through a
+link.
 
 ## Sending one file with `sendfile`
 

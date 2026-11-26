@@ -32,3 +32,6 @@ Manifest.toml
 /test/patches/**/work/
 /test/patches/**/*.log
 /test/patches/**/*.out
+
+# facil.io sources, fetched by deps/fetch_facil.sh
+/deps/facil.io/

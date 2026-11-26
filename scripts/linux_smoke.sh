@@ -31,12 +31,11 @@ uname -a
 ldd --version 2>&1 | head -1 || true
 ${CC:-cc} --version | head -1
 julia --version
-[ -f deps/facil.io/lib/facil/fio.c ] || git submodule update --init --recursive ||
-  echo "no submodule checkout; deps/build.jl will download facil.io"
+deps/fetch_facil.sh
 
 step "build libfacil_julia"
 julia --project=. -e 'using Pkg; Pkg.instantiate()'
-julia --project=. deps/build.jl --verbose
+julia --project=. deps/build_local.jl --verbose
 julia --project=. -e 'using Facil; println(Facil.LIBFJL); println(Facil.fjl_build_id())'
 
 step "HttpTypes tests"

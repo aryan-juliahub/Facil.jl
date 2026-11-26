@@ -4,9 +4,9 @@ Facil.jl includes code from the projects below. Each keeps its own licence.
 
 ## facil.io
 
-Facil.jl builds facil.io (vendored in `deps/facil.io`, with the patches in
-`deps/patches`) into its native library. Licence: MIT, full text in
-`deps/facil.io/LICENSE`.
+Facil.jl builds facil.io (fetched at a pinned commit by `deps/build_local.jl`
+or `deps/fetch_facil.sh`, with the patches in `deps/patches`) into its native
+library. Licence: MIT, reproduced here.
 
 ```
 Copyright (c) 2016-2019 Boaz Segev

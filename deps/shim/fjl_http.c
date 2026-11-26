@@ -6,6 +6,7 @@
 #include <http1.h>
 #include <http_internal.h>
 #include <fio_tls.h>
+#include <websockets.h>
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -75,6 +76,7 @@ fjl_server_s *fjl_http_server_new(const fjl_listen_s *o,
   if (o->public_folder) {
     st->public_folder_length = strlen(o->public_folder);
     st->public_folder = strdup(o->public_folder);
+    st->public_folder_flags = o->public_folder_flags;
   }
   s->on_finish = o->on_finish;
   s->on_release = on_release;
@@ -274,7 +276,7 @@ static void close_task(void *p, void *b, void *c) {
     uuids[i++] = x->uuid;
   pthread_mutex_unlock(&s->mu);
   for (size_t j = 0; j < i; j++)
-    fio_close(uuids[j]);
+    websocket_shutdown(uuids[j], 1);
   free(uuids);
   (void)b;
   (void)c;
@@ -377,8 +379,10 @@ static void drain_task(void *p, void *secs, void *c) {
     s->listener = -1;
   }
   pthread_mutex_lock(&s->mu);
-  for (fjl_conn_s *x = s->conns.next; x != &s->conns; x = x->next)
+  for (fjl_conn_s *x = s->conns.next; x != &s->conns; x = x->next) {
     fio_timeout_set(x->uuid, (uint8_t)(uintptr_t)secs);
+    websocket_shutdown(x->uuid, 0);
+  }
   pthread_mutex_unlock(&s->mu);
   (void)c;
 }
@@ -592,7 +596,11 @@ int fjl_resp_send(http_s *h, int status, const char *body, size_t len,
     if (is_draining(http_settings(h)))
       http_set_header(h, HTTP_HEADER_CONNECTION, fiobj_dup(HTTP_HVALUE_CLOSE));
   }
-  if (!len) {
+  /* 1xx, 204 and 304 never carry content */
+  const int bodyless = status < 200 || status == 204 || status == 304;
+  if (!len || bodyless) {
+    if (len && dealloc)
+      dealloc((void *)body);
     http_finish(h);
     return 0;
   }

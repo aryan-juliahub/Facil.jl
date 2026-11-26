@@ -674,7 +674,7 @@ compress_response(req, res::AbstractString, o::CompressOptions) =
 
 function compress_response(req, res::Response{T}, o::CompressOptions) where {T<:Union{String,Vector{UInt8},SubString{String}}}
     b = res.body
-    sizeof(b) < o.min_size && return res
+    (sizeof(b) < o.min_size || bodyless(Int(UInt16(res.status)))) && return res
     ct = content_type_of(res.headers, b)
     enc, varies = choose_encoding(req, res, o, ct)
     varies && add_vary!(res.headers)

@@ -49,8 +49,49 @@ First version. Nothing has been released or registered yet.
   table or changes Julia runtime variables. For light-load handlers use
   `inline = true`, and for streamed uploads `Stream(on_chunk)`.
 
+- Fixes and behaviour changes after the first documentation pass:
+  - Every status from 100 to 999 is sent with its own number. Before, `418`,
+    `451` and every code without a registered phrase went out as `500`. The
+    phrase is `canonical_reason(status)`, or `Unknown`.
+  - `1xx`, `204` and `304` responses are sent without a body, without
+    `content-length` and without a default `content-type`; before, a body
+    given with them was sent.
+  - A request line with a space inside the target (`GET /a b HTTP/1.1`) gets a
+    `400`; before, the handler saw the target up to the space.
+  - `public_folder`: a path with an encoded NUL (`%00`) gets a `400`; before,
+    the NUL cut the file name short (`/a.txt%00.png` served `a.txt`). New
+    keywords `dotfiles = :serve | :deny` and `symlinks = :follow | :inside`;
+    the defaults keep the earlier behaviour.
+  - An unknown `serve` or `serve!` keyword throws an `ArgumentError` that names
+    the closest valid keyword; before, a `MethodError` about
+    `Facil.ServerOptions`.
+  - `close(server)` and `close(server; grace)` call `on_shutdown` for the
+    server's WebSockets and send them a `1001` close; before, they were
+    dropped without a close frame. With `grace` this happens when the drain
+    starts.
+  - SIGTERM (and Ctrl-C in a script) under `serve`: on Julia 1.12 and later
+    handlers waiting on I/O (`Base.sleep`, sockets, child processes) finish
+    within `shutdown_grace`; before, they never returned. The first `serve`
+    now moves Julia's event loop to its own thread
+    (`Base.Experimental.make_io_thread`), every server of the process is
+    drained with its own `shutdown_grace`, and the verbose log has one more
+    line per server. Julia 1.10 and 1.11 keep the old limits, but the process
+    no longer hangs at exit when a handler is stuck.
+  - The error log limit is per error type and call site (innermost four
+    frames), no longer per type alone.
+  - `Facil.Timer` has a `show` method.
+- Installing: `Pkg.add` by URL works. The facil.io git submodule is gone (Pkg
+  cannot check out a repository that has one); the pinned sources are
+  downloaded and verified instead (`deps/fetch_facil.sh` for the patch
+  tooling). `deps/build.jl` is now `deps/build_local.jl` and runs when Facil
+  is precompiled, so the library is built on first load and rebuilt after a
+  change in `deps/shim` or `deps/patches`; `Pkg.build("Facil")` does nothing.
+
 ### HttpTypes
 
+- `isequal` between a `HeaderName` or `HeaderValue` and a string (or bytes) is
+  `false`, so that values that are `isequal` hash alike; `==` still compares
+  across types. `HttpTypes.standard_header(i)` checks its index.
 - Port of the Rust `http` crate 1.5.0 in `lib/HttpTypes`: `HttpMethod`,
   `StatusCode`, `Version`, `HeaderName`, `HeaderValue`, `HeaderMap`, `Uri` and
   its parts, `Extensions`, `Request`, `Response`, and the crate's error types,
@@ -58,13 +99,16 @@ First version. Nothing has been released or registered yet.
 
 ### C library
 
-- facil.io pinned at `51287473` with 19 patches (`deps/patches`): temp-file
+- facil.io pinned at `51287473` with 21 patches (`deps/patches`): temp-file
   cleanup, exact timers, gather-write send path, close races, TLS layer,
   HTTP robustness, file-descriptor capacity, request bodies, WebSocket fixes and
   controls, TLS write buffer, WebSocket performance, kqueue re-arm batching,
   epoll uuid events, a shared HTTP/1.1 read buffer, close-marker race, reactor
-  thread wake-up, per-thread kqueues, and the slow-reader guard for writes that
-  would block.
+  thread wake-up, per-thread kqueues, the slow-reader guard for writes that
+  would block, HTTP conformance, and WebSocket shutdown.
+- Patch 20 (`http-conformance`) and patch 21 (`websocket-shutdown`): the C
+  side of the status line, bodyless status, request line, static file and
+  WebSocket close fixes listed under Server.
 - Patch 19 (`slow-reader-would-block`): a client that never reads is also
   dropped when a write takes nothing at all, which is what happens on Linux
   loopback.
@@ -73,7 +117,7 @@ First version. Nothing has been released or registered yet.
   `close()` that could hang in the kernel forever (an unkillable process).
 - A C shim (`deps/shim`) for request reading, no-copy sends, task hand-off,
   bodies, streaming, timers, WebSockets and TLS.
-- `deps/build.jl` builds the library with the system C compiler.
+- `deps/build_local.jl` builds the library with the system C compiler.
 
 ### Benchmarks and docs
 

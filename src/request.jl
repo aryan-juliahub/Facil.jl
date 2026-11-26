@@ -29,6 +29,10 @@ function init_http_tables()
     GC.@preserve names begin
         @ccall LIBFJL.fjl_http_init(ptrs::Ptr{Ptr{UInt8}}, lens::Ptr{UInt8}, length(names)::Cint)::Cint
     end
+    for code in 100:999
+        reason = something(canonical_reason(StatusCode(code)), "Unknown")
+        @ccall LIBFJL.http_status_reason_set(code::Csize_t, reason::Ptr{UInt8}, sizeof(reason)::Csize_t)::Cvoid
+    end
     nothing
 end
 
@@ -50,7 +54,7 @@ without a body.
     hm = HeaderMap{HeaderValue}(n)
     for i in 1:n
         c = unsafe_load(r.headers, i)
-        name = c.code != 0 ? HttpTypes.standard_header(c.code) : HeaderName(c.name.ptr, c.name.len)
+        name = c.code != 0 ? @inbounds(HttpTypes.standard_header(c.code)) : HeaderName(c.name.ptr, c.name.len)
         append!(hm, name, HttpTypes.unchecked(HeaderValue, c.value.ptr, c.value.len))
     end
     body = r.body.len > 0 ? unsafe_string(r.body.ptr, r.body.len) : ""

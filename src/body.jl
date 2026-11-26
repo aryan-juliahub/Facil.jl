@@ -630,7 +630,7 @@ function read_head(h::Ptr{Cvoid}, content_length::Integer)
     hm = HeaderMap{HeaderValue}(n)
     for i in 1:n
         c = unsafe_load(r.headers, i)
-        name = c.code != 0 ? HttpTypes.standard_header(c.code) : HeaderName(c.name.ptr, c.name.len)
+        name = c.code != 0 ? @inbounds(HttpTypes.standard_header(c.code)) : HeaderName(c.name.ptr, c.name.len)
         append!(hm, name, HttpTypes.unchecked(HeaderValue, c.value.ptr, c.value.len))
     end
     RequestHead(m, u, v, hm, Int(content_length))

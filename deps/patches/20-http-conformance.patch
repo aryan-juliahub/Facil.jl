@@ -1,0 +1,212 @@
+diff --git a/lib/facil/http/http.c b/lib/facil/http/http.c
+--- a/lib/facil/http/http.c
++++ b/lib/facil/http/http.c
+@@ -497,6 +497,11 @@
+       return -1;
+   }
+   struct stat file_data = {.st_size = 0};
++  const http_settings_s *settings = http2protocol(h)->settings;
++  const uint8_t public_flags =
++      (prefix && settings && prefix == settings->public_folder)
++          ? (uint8_t)settings->public_folder_flags
++          : 0;
+   static uint64_t accept_enc_hash = 0;
+   if (!accept_enc_hash)
+     accept_enc_hash = fiobj_hash_string("accept-encoding", 15);
+@@ -524,6 +529,9 @@
+           // decode hex value (this is a percent encoded value).
+           if (hex2byte((uint8_t *)tmp.data + tmp.len, (uint8_t *)pos + 1))
+             return -1;
++          /* a NUL would end the file name early */
++          if (!tmp.data[tmp.len])
++            return -2;
+           tmp.len++;
+           pos += 3;
+         } else
+@@ -534,6 +542,11 @@
+       /* test for path manipulations after decoding */
+       if (http_test_encoded_path(tmp.data + prefix_len, tmp.len - prefix_len))
+         return -1;
++      if (!error_page && (public_flags & HTTP_PUBLIC_DENY_DOTFILES)) {
++        for (size_t i = prefix_len; i + 1 < tmp.len; i++)
++          if (tmp.data[i] == '/' && tmp.data[i + 1] == '.')
++            return -1;
++      }
+     }
+     if (tmp.data[tmp.len - 1] == '/')
+       fiobj_str_write(filename, "index.html", 10);
+@@ -568,6 +581,12 @@
+       !(S_ISREG(file_data.st_mode) || S_ISLNK(file_data.st_mode)))
+     return -1;
+ found_file:
++  if (public_flags & HTTP_PUBLIC_CONTAIN_SYMLINKS) {
++    char real[PATH_MAX];
++    if (!realpath(s.data, real) || strncmp(real, prefix, prefix_len) ||
++        real[prefix_len] != '/')
++      return -1;
++  }
+   /* set last-modified */
+   {
+     FIOBJ tmp = fiobj_str_buf(32);
+@@ -751,7 +770,10 @@
+   if (!r || !r->private_data.vtbl) {
+     return;
+   }
+-  add_content_length(r, 0);
++  /* 1xx, 204 and 304 have no content, so no length is declared for them */
++  if (!r->status ||
++      (r->status >= 200 && r->status != 204 && r->status != 304))
++    add_content_length(r, 0);
+   add_date(r);
+   ((http_vtable_s *)r->private_data.vtbl)->http_finish(r);
+ }
+@@ -2701,6 +2723,9 @@
+ // clang-format off
+ #define HTTP_SET_STATUS_STR(status, str) [status-100] = { .data = (char *)(str), .len = (sizeof(str) - 1) }
+ // clang-format on
++
++static fio_str_info_s http_status_reasons[900];
++static fio_str_info_s http_status_lines[900];
+ 
+ /** Returns the status as a C string struct */
+ fio_str_info_s http_status2str(uintptr_t status) {
+@@ -2771,16 +2796,45 @@
+       HTTP_SET_STATUS_STR(511, "Network Authentication Required"),
+   };
+   fio_str_info_s ret = (fio_str_info_s){.len = 0, .data = NULL};
++  if (status >= 100 && status <= 999 && http_status_reasons[status - 100].data)
++    return http_status_reasons[status - 100];
+   if (status >= 100 &&
+       (status - 100) < sizeof(status2str) / sizeof(status2str[0]))
+     ret = status2str[status - 100];
+   if (!ret.data) {
+-    ret = status2str[400];
++    if (status >= 100 && status <= 999)
++      ret = (fio_str_info_s){.data = (char *)"Unknown", .len = 7};
++    else
++      ret = status2str[400];
+   }
+   return ret;
+ }
+ #undef HTTP_SET_STATUS_STR
+ 
++/* Sets the reason phrase of a status in 100..999 for every later response.
++ * Not thread safe: call before the first connection. */
++void http_status_reason_set(uintptr_t status, const char *reason, size_t len) {
++  if (status < 100 || status > 999 || (len && !reason))
++    return;
++  char *line = malloc(len + 24);
++  if (!line)
++    return;
++  int n = snprintf(line, 20, "HTTP/1.1 %u ", (unsigned)status);
++  memcpy(line + n, reason, len);
++  memcpy(line + n + len, "\r\n", 3);
++  http_status_reasons[status - 100] =
++      (fio_str_info_s){.data = line + n, .len = len};
++  http_status_lines[status - 100] =
++      (fio_str_info_s){.data = line, .len = (size_t)n + len + 2};
++}
++
++/* The HTTP/1.1 status line set for `status`, or no data when none was set. */
++fio_str_info_s http_status_line(uintptr_t status) {
++  if (status >= 100 && status <= 999)
++    return http_status_lines[status - 100];
++  return (fio_str_info_s){.len = 0, .data = NULL};
++}
++
+ #if DEBUG
+ void http_tests(void) {
+   fprintf(stderr, "=== Testing HTTP helpers\n");
+diff --git a/lib/facil/http/http.h b/lib/facil/http/http.h
+--- a/lib/facil/http/http.h
++++ b/lib/facil/http/http.h
+@@ -382,8 +382,9 @@
+   intptr_t max_clients;
+   /** SSL/TLS support. */
+   void *tls;
+-  /** reserved for future use. */
+-  intptr_t reserved1;
++  /** `HTTP_PUBLIC_*` flags for files served from the public folder (this
++   * was `reserved1`, so the layout is unchanged). */
++  intptr_t public_folder_flags;
+   /** reserved for future use. */
+   intptr_t reserved2;
+   /** reserved for future use. */
+@@ -842,6 +843,16 @@
+ 
+ /** Returns a human readable string related to the HTTP status number. */
+ fio_str_info_s http_status2str(uintptr_t status);
++/** Paths with a segment that starts with a dot are not served. */
++#define HTTP_PUBLIC_DENY_DOTFILES 1
++/** Files that resolve outside the public folder are not served. The folder
++ * must be given as its own real path. */
++#define HTTP_PUBLIC_CONTAIN_SYMLINKS 2
++/** Sets the reason phrase sent for a status in 100..999. Call before the
++ * first connection; the phrase is copied. */
++void http_status_reason_set(uintptr_t status, const char *reason, size_t len);
++/** The HTTP/1.1 status line set by `http_status_reason_set`, if any. */
++fio_str_info_s http_status_line(uintptr_t status);
+ 
+ /** Registers a Mime-Type to be associated with the file extension. */
+ void http_mimetype_register(char *file_ext, size_t file_ext_len,
+diff --git a/lib/facil/http/http1.c b/lib/facil/http/http1.c
+--- a/lib/facil/http/http1.c
++++ b/lib/facil/http/http1.c
+@@ -1545,12 +1545,22 @@
+       HTTP_SET_STATUS_STR(510, "Not Extended"),
+       HTTP_SET_STATUS_STR(511, "Network Authentication Required"),
+   };
+-  fio_str_info_s ret = (fio_str_info_s){.len = 0, .data = NULL};
++  fio_str_info_s ret = http_status_line(status);
++  if (ret.data)
++    return ret;
+   if (status >= 100 &&
+       (status - 100) < sizeof(status2str) / sizeof(status2str[0]))
+     ret = status2str[status - 100];
+   if (!ret.data) {
+-    ret = status2str[400];
++    if (status >= 100 && status <= 999) {
++      /* a status without a phrase keeps its number */
++      static __thread char line[32];
++      ret.len = (size_t)snprintf(line, sizeof(line), "HTTP/1.1 %u Unknown\r\n",
++                                 (unsigned)status);
++      ret.data = line;
++    } else {
++      ret = status2str[400];
++    }
+   }
+   return ret;
+ }
+diff --git a/lib/facil/http/http_internal.c b/lib/facil/http/http_internal.c
+--- a/lib/facil/http/http_internal.c
++++ b/lib/facil/http/http_internal.c
+@@ -44,9 +44,13 @@
+     goto eventsource;
+   if (settings->public_folder) {
+     fio_str_info_s path_str = fiobj_obj2cstr(h->path);
+-    if (!http_sendfile2(h, settings->public_folder,
+-                        settings->public_folder_length, path_str.data,
+-                        path_str.len)) {
++    int r = http_sendfile2(h, settings->public_folder,
++                           settings->public_folder_length, path_str.data,
++                           path_str.len);
++    if (!r)
++      return;
++    if (r == -2) {
++      http_send_error(h, 400);
+       return;
+     }
+   }
+diff --git a/lib/facil/http/parsers/http1_parser.h b/lib/facil/http/parsers/http1_parser.h
+--- a/lib/facil/http/parsers/http1_parser.h
++++ b/lib/facil/http/parsers/http1_parser.h
+@@ -402,6 +402,9 @@
+   start = tmp + 1;
+   if (start + 5 >= end) /* require "HTTP/" */
+     return -1;
++  /* the line is method SP target SP version: a further space is malformed */
++  if (memchr(start, ' ', (size_t)(end - start)))
++    return -1;
+   if (http1_on_version(parser, (char *)start, end - start))
+     return -1;
+   /* */

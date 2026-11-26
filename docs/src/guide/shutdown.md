@@ -9,11 +9,12 @@ event streams and streamed responses when a server closes.
 - A server started with [`serve`](@ref) stops on SIGTERM (`kill <pid>`), after
   giving requests in progress `shutdown_grace` seconds (default 10). This is
   what process managers send.
-- **The SIGTERM drain only saves handlers that are computing or waiting in
-  `Facil.sleep`.** A handler that is waiting on a socket, a file, a child
-  process or `Base.sleep` when the signal arrives never finishes. If your
-  handlers do I/O, drain with `close(server; grace)` before the process is
-  signalled: see [Draining handlers that do I/O](@ref shutdown-drain-io).
+- On Julia 1.12 and later the drain on SIGTERM is `close(server; grace)` run
+  by a task, so every handler can finish, whatever it waits on. **On Julia
+  1.10 and 1.11 a handler that is waiting on a socket, a file, a child
+  process or `Base.sleep` when the signal arrives never finishes**; there,
+  drain with `close(server; grace)` before the process is signalled: see
+  [Draining before the signal](@ref shutdown-drain-io).
 - A server started with [`serve!`](@ref) stops when you call `close(server)` or
   `close(server; grace = seconds)`.
 - Ctrl-C stops `serve` cleanly in the REPL. In a script it ends the process
@@ -25,8 +26,8 @@ event streams and streamed responses when a server closes.
 
 | Call | Effect |
 |---|---|
-| `close(server)` | Stop accepting connections and close the open ones once their queued output is sent. Returns at once. |
-| `close(server; grace = s)` | Stop accepting, let requests in progress finish, close what is left after `s` seconds. Returns at once. |
+| `close(server)` | Stop accepting connections and close the open ones once their queued output is sent; WebSockets get a `1001` close. Returns at once. |
+| `close(server; grace = s)` | Stop accepting, let requests in progress finish, send WebSockets a `1001` close, close what is left after `s` seconds. Returns at once. |
 | `wait(server)` | Block until the server has fully stopped. |
 | `isopen(server)` | `true` until `close` is called. |
 
@@ -47,7 +48,9 @@ With `grace`, the server drains:
    is closed 2 to 3 seconds into the drain.
 3. Each request in progress runs to completion and gets its response, sent
    with `connection: close`.
-4. After `grace` seconds, whatever is still open is closed.
+4. Each WebSocket gets its `on_shutdown` callback and a `1001` close frame,
+   and is closed.
+5. After `grace` seconds, whatever is still open is closed.
 
 `wait(server)` returns as soon as the last connection is gone, which is usually
 long before the grace period ends. If a client is holding an idle keep-alive
@@ -92,8 +95,10 @@ What happens, in order:
 1. Julia receives the signal and starts to exit. Julia prints its own signal
    report to stderr first (on Julia 1.13, `signal 15: Terminated` and one
    stack trace per thread). This is noise from Julia, not an error.
-2. Facil's exit hook drains every open server in the process as described
-   above. With `verbose = true` it logs
+2. Facil's exit hook hands the drain to a task, which calls
+   `close(server; grace = shutdown_grace)` for every open server in the
+   process, each with its own `shutdown_grace`, and waits for them. With
+   `verbose = true` it logs
    `Facil: signal received; closing 1 server(s), up to 5.0 s for open requests`.
 3. The process ends. Its exit status is that of a process killed by SIGTERM
    (143 in a shell), not 0.
@@ -103,35 +108,46 @@ Details worth knowing:
 - The drain is tied to `serve`. A process that only uses `serve!` (and waits
   some other way) exits on SIGTERM without draining. End your program with a
   `serve` call, or with `wait(server)` plus your own shutdown trigger as in the
-  example above.
-- If several servers are open, all of them drain together, and the longest
-  `shutdown_grace` among them applies.
+  example above. Once one `serve` is running, every server of the process is
+  drained, including those started with `serve!`.
 - Code after `serve(...)` does **not** run on SIGTERM: the process exits from
   inside `serve`. Put cleanup in an `atexit` hook if you need it.
 - SIGKILL cannot be handled; requests in progress are lost.
 
-!!! warning "Handlers that wait on I/O do not survive the SIGTERM drain"
-    Once Julia has received SIGTERM it runs its exit hooks and its event loop
-    stops turning. Facil's drain runs inside such a hook. A handler that is
-    computing, or waiting in [`Facil.sleep`](@ref), still finishes and its
-    response is sent. A handler waiting on anything Julia's event loop
-    delivers does not: a socket (a database or HTTP client), a child process,
-    `Base.sleep`, a `Timer`. It never wakes up, its client gets no response,
-    and the process waits out the whole `shutdown_grace` before exiting.
+### How it works, and what differs by Julia version
 
-    Measured on Julia 1.13 with a one-second handler and `shutdown_grace = 5`:
-    with `Facil.sleep(1)` or a one-second computation the client got its
-    response and the process exited after 0.8 s; with `Base.sleep(1)`, a
-    socket read or a child process (`run`) the client got nothing and the process
-    exited after 5 s. On Julia 1.10 the drain was less reliable still: in our
-    runs even a computing handler was sometimes cut off.
+Julia answers SIGTERM by interrupting its first thread, wherever it is, and
+running the exit hooks there. That thread is normally the one that runs
+Julia's event loop (sockets, files, child processes, `Base.sleep`, `Timer`),
+so from that moment nothing waiting on the event loop wakes up again.
 
-## [Draining handlers that do I/O](@id shutdown-drain-io)
+| | Julia 1.12 and later | Julia 1.10 and 1.11 |
+|:--|:--|:--|
+| Event loop during the drain | Runs. The first `serve` moves it to a thread of its own (`Base.Experimental.make_io_thread`). | Stopped. These versions have no way to move it. |
+| Who drains | A Julia task, with `close(server; grace)`. With one Julia thread (`-t 1`), the exit hook itself. | The exit hook itself. |
+| Handler computing | Finishes. | Finishes in most runs; not reliable on 1.10. |
+| Handler in [`Facil.sleep`](@ref) | Finishes. | Not reliable on 1.10. |
+| Handler waiting on a socket, file, child process, `Base.sleep`, `Timer` | Finishes. | Never returns; its client gets no response and the process exits when `shutdown_grace` runs out. |
+| WebSockets | `on_shutdown`, then a `1001` close. | `1001` close; `on_shutdown` when the reactor can run it. |
+| Grace period | Each server's own `shutdown_grace`. | The longest `shutdown_grace` among the servers. |
+
+Measured on Julia 1.13 (macOS, `-t 4` and `-t 1`) with one-second handlers
+and `shutdown_grace = 5`: handlers waiting in `Base.sleep`, in
+`Facil.sleep` and on a child process (`run`) all answered, and the process
+exited 1.0 s after the signal. On Julia 1.10 the same three requests got no
+answer in two runs of three and the process exited after 5.5 s.
+
+Moving the event loop is process-wide and happens only when `serve` is
+called. Code that relied on all I/O callbacks running on Julia's first thread
+(rare) no longer can.
+
+## [Draining before the signal](@id shutdown-drain-io)
 
 `close(server; grace)` called from ordinary code, while the process is still
-running normally, drains every kind of handler. So give your service a way to
-be told to drain, and have whatever stops the process use it first. An
-authenticated endpoint is the simplest:
+running normally, drains every kind of handler on every Julia version. So on
+Julia 1.10 and 1.11, or when you want the process to end with status 0, give
+your service a way to be told to drain, and have whatever stops the process
+use it first. An authenticated endpoint is the simplest:
 
 ```@eval
 Main.example("shutdown_drain.jl")
@@ -144,8 +160,7 @@ draining
 finished
 ```
 
-The handler here waits in `Base.sleep`, which the SIGTERM drain would not
-survive. After the drain request the server stops accepting, the request in
+After the drain request the server stops accepting, the request in
 flight gets its `finished`, `wait` returns, and the program ends with exit
 status 0. Under systemd, call the endpoint from `ExecStop=`; in Kubernetes,
 from a `preStop` hook ([Deployment](deployment.md)). SIGTERM then arrives at a
@@ -161,36 +176,30 @@ What Ctrl-C (SIGINT) does depends on how Julia runs:
 | How Julia runs | Ctrl-C |
 |---|---|
 | In the REPL | `serve` closes the server and returns; you are back at the prompt. |
-| `julia server.jl` | Julia prints a signal report (`signal 2: Interrupt` and stack traces) and exits. Facil's exit hook still drains the servers first. Exit status 130. |
+| `julia server.jl` | Julia prints a signal report (`signal 2: Interrupt` and stack traces) and exits. Facil drains the servers first, exactly as on SIGTERM. Exit status 130. |
 | `julia -e '...'`, or after `Base.exit_on_sigint(false)` | Nothing. The interrupt does not reach `serve` and the server keeps running. Stop it with SIGTERM. |
 
 So Ctrl-C is fine while you develop. For anything automated, send SIGTERM.
 
 ## Long-lived connections
 
-WebSockets, event streams and streamed responses have no "request in
-progress" that finishes by itself, so they hold a draining server open until
-the grace period ends. Then they are cut:
+Event streams and streamed responses have no "request in progress" that
+finishes by itself, so they hold a draining server open until the grace
+period ends. Then they are cut. WebSockets are told to go at once:
 
-| Connection | On `close(server)` or when the grace period ends |
+| Connection | On `close(server)`, or during `close(server; grace)` |
 |---|---|
-| WebSocket | Dropped without a close frame. `on_close` runs; `on_shutdown` does not. |
-| Event stream ([`sse`](@ref)) | Closed. `isopen(s)` turns `false` and [`write_event`](@ref) returns `false`, so the function should return. |
-| Streamed response ([`stream`](@ref)) | Closed without the terminating chunk; the client sees an incomplete body. `write` throws an `IOError`. |
+| WebSocket | `on_shutdown` runs, the client gets a `1001` close frame, the connection closes and `on_close` runs. With `grace` this happens when the drain starts, not when it ends. |
+| Event stream ([`sse`](@ref)) | Closed (with `grace`: when the grace period ends). `isopen(s)` turns `false` and [`write_event`](@ref) returns `false`, so the function should return. |
+| Streamed response ([`stream`](@ref)) | Closed without the terminating chunk (with `grace`: when the grace period ends); the client sees an incomplete body. `write` throws an `IOError`. |
 
-If you want these to end sooner or more politely, end them yourself before
-closing the server:
+If you want streams to end sooner or more politely, end them yourself before
+closing the server: write stream and event-stream functions as loops over
+`isopen`, and give them a flag to stop on (for example a
+`Threads.Atomic{Bool}` that your shutdown code sets).
 
-- Write stream and event-stream functions as loops over `isopen`, and give
-  them a flag to stop on (for example a `Threads.Atomic{Bool}` that your
-  shutdown code sets).
-- For WebSockets, close each connection with a code (`close(ws; code = 1001)`),
-  or tell clients first through a channel they subscribe to
-  ([`publish`](@ref)).
-
-`on_shutdown` and the `1001` close do happen in one case: when the process
-exits normally (the script ends, or `exit()` is called) while connections are
-open.
+Only the WebSockets of the server being closed are affected; other servers in
+the process keep theirs.
 
 ## The reactor outlives servers
 

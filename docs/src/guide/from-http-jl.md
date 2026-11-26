@@ -173,7 +173,7 @@ connection stays open for the next request. See
 - **Bodies are not copied.** A `Vector{UInt8}` you return is sent from your
   array. Do not change it afterwards.
 - **Errors.** An uncaught exception gives a plain `500` and a log entry on
-  stderr; identical error types are logged at most once per 10 seconds. See
+  stderr; an error type is logged at most once per call site every 10 seconds. See
   [Errors and logging](errors.md).
 - **Request bodies.** By default the whole body is read before the handler
   runs (up to `body_in_memory`, 16 MiB). To read uploads as they arrive, or to

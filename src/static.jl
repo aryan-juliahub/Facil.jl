@@ -192,10 +192,23 @@ compress_response(req, res::Response{FileBody}, ::CompressOptions) = res
     nothing
 end
 
-static_folder(::Nothing) = nothing
-function static_folder(dir::AbstractString)
+const PUBLIC_DENY_DOTFILES = 0x01
+const PUBLIC_CONTAIN_SYMLINKS = 0x02
+
+static_folder(::Nothing, ::Symbol) = nothing
+function static_folder(dir::AbstractString, symlinks::Symbol)
     d = abspath(expanduser(String(dir)))
     occursin('\0', d) && throw(ArgumentError("public_folder must not contain NUL"))
     isdir(d) || throw(ArgumentError("public_folder $(repr(d)) is not a directory"))
+    # Containment compares resolved paths, so the folder is resolved too.
+    symlinks === :inside && (d = realpath(d))
     length(d) > 1 ? String(rstrip(d, '/')) : d
+end
+
+function static_flags(dir, dotfiles::Symbol, symlinks::Symbol)
+    dotfiles in (:serve, :deny) || throw(ArgumentError("dotfiles must be :serve or :deny, got $(repr(dotfiles))"))
+    symlinks in (:follow, :inside) || throw(ArgumentError("symlinks must be :follow or :inside, got $(repr(symlinks))"))
+    dir === nothing && (dotfiles, symlinks) != (:serve, :follow) &&
+        throw(ArgumentError("dotfiles and symlinks apply to public_folder, which is not set"))
+    (dotfiles === :deny ? PUBLIC_DENY_DOTFILES : 0x00) | (symlinks === :inside ? PUBLIC_CONTAIN_SYMLINKS : 0x00)
 end

@@ -104,7 +104,7 @@ function init_reactor()
     RUN_POSTED[] = @cfunction(run_posted, Cvoid, (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}))
     CANCEL_POSTED[] = @cfunction(cancel_posted, Cvoid, (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}))
     atexit() do
-        fjl_is_running() && !fjl_on_reactor() && fjl_stop_blocking()
+        fjl_is_running() && !fjl_on_reactor() && !EXIT_STUCK[] && fjl_stop_blocking()
     end
     nothing
 end
