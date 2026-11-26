@@ -54,24 +54,47 @@ elseif case == "unsubscribe"
     end
 elseif case == "sigint"
     # Ctrl-C lands on thread 1, here inside on_reactor's lock section or out of it.
-    Base.exit_on_sigint(false)
-    F.ensure_reactor()
-    let pid = getpid(), ints = 0, held = false, t0 = time()
-        killer = run(pipeline(`sh -c "while kill -INT $pid 2>/dev/null; do sleep 0.003; done"`), wait = false)
-        while time() - t0 < 5 && !held
+    # A lock left held by the interrupt stays held; the reactor takes it briefly.
+    function still_held()
+        t = time()
+        while time() - t < 1
             try
+                islocked(F.POSTED_LOCK) || return false
+                Libc.systemsleep(0.01)
+            catch e
+                e isa InterruptException || rethrow()
+            end
+        end
+        true
+    end
+    stop(killer) = (ccall(:signal, Ptr{Cvoid}, (Cint, Ptr{Cvoid}), 2, Ptr{Cvoid}(1)); process_running(killer) && kill(killer, Base.SIGKILL))
+    function interrupt_loop()
+        F.ensure_reactor()
+        pid, ints, held, t0 = getpid(), 0, false, time()
+        killer = run(pipeline(`sh -c "while kill -INT $pid 2>/dev/null; do sleep 0.02; done"`), wait = false)
+        while true
+            try
+                (held || time() - t0 >= 15) && break
                 for _ in 1:10_000
                     F.on_reactor(() -> nothing)
                 end
             catch e
                 e isa InterruptException || rethrow()
                 ints += 1
-                held = islocked(F.POSTED_LOCK)
+                islocked(F.POSTED_LOCK) && (stop(killer); held = still_held())
             end
         end
-        kill(killer, Base.SIGKILL)
+        stop(killer)
+        for _ in 1:3
+            try
+                Base.sleep(0.05)
+            catch
+            end
+        end
         println(ints > 0 && !held ? "UNLOCKED" : "HELD $ints")
     end
+    Base.exit_on_sigint(false)
+    interrupt_loop()
 end
 println("OK")
 """
@@ -115,17 +138,20 @@ let target = -1
 end
 """
 
-# The child's last line, or "HUNG" if it did not finish within `limit` seconds.
+# The child's output lines joined, "HUNG" if it did not finish within `limit`
+# seconds, or "FORCED" if Julia forced a SIGINT through (it does so for rapid
+# repeats, at any instruction, which no lock section can defer).
 function child(case; limit = 90)
     cmd = `$(Base.julia_cmd()) -t 4 --project=$(Base.active_project()) --startup-file=no -e $CHILD $case`
-    out = Pipe()
-    proc = run(pipeline(ignorestatus(cmd); stdout = out, stderr = devnull); wait = false)
+    out, err = Pipe(), IOBuffer()
+    proc = run(pipeline(ignorestatus(cmd); stdout = out, stderr = err); wait = false)
     close(out.in)
     lines = String[]
     reader = @async (for l in eachline(out); push!(lines, l); end)
     status = timedwait(() -> process_exited(proc), Float64(limit); pollint = 0.05)
     status === :ok || (kill(proc, Base.SIGKILL); wait(proc))
     wait(reader)
+    occursin("Force throwing a SIGINT", String(take!(err))) && return "FORCED"
     status === :ok ? join(lines, " ") : "HUNG"
 end
 
@@ -272,10 +298,13 @@ end
         @test child("unsubscribe") == "OK"
     end
 
-    # Julia 1.10 forces SIGINTs this frequent through at any instruction, so
-    # the child would test Julia's forced throw instead.
-    VERSION >= v"1.11-" && @testset "Ctrl-C inside a lock section" begin
-        @test child("sigint") == "UNLOCKED OK"
+    @testset "Ctrl-C inside a lock section" begin
+        r = child("sigint")
+        if r == "FORCED"
+            @info "Julia forced a SIGINT through; the lock-section check was not exercised"
+        else
+            @test r == "UNLOCKED OK"
+        end
     end
 end
 
