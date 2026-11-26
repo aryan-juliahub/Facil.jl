@@ -157,7 +157,7 @@ function prepare_sources(src)
     apply = joinpath(PATCHES, "apply.sh")
     if isfile(apply)
         log("applying patch series: ", apply)
-        run(pipeline(addenv(`sh $apply $src`, "FACIL_IO_DIR" => FACIL); stdout=VERBOSE ? stdout : devnull))
+        run(pipeline(addenv(`bash $apply $src`, "FACIL_IO_DIR" => FACIL); stdout=VERBOSE ? stdout : devnull))
         return true
     end
     cp(joinpath(FACIL, "lib"), joinpath(src, "lib"))
