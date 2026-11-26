@@ -12,6 +12,12 @@ const COMPRESS_PORTS = 3785:3794
 const TEXT_BODY = join(("{\"id\":$i,\"name\":\"user$i\",\"tags\":[\"a\",\"b\"]}" for i in 1:400), ",")
 
 decode(enc, b) = enc == "gzip" ? Facil.gunzip(b) : enc == "br" ? Facil.unbrotli(b) : enc == "zstd" ? Facil.unzstd(b) : b
+# Some platforms have no working brotli decoder (see docs/src/reference/platforms.md);
+# there the brotli round trips are recorded as broken instead of run.
+const UNBROTLI = Facil.brotli_decoder_works()
+macro brtest(enc, ex)
+    :(($(esc(enc)) in ("br", :br) && !UNBROTLI) ? @test_broken(false) : @test($(esc(ex))))
+end
 
 function compress_app(req)
     p = path(uri(req))
@@ -52,8 +58,9 @@ const AE_ALL = ["Accept-Encoding" => "gzip, deflate, br, zstd"]
             @test Facil.gunzip(Facil.gzip(data)) == data
             @test Facil.gunzip(Facil.gzip(data; level = 1)) == data
             @test Facil.unzstd(Facil.zstd(data)) == data
-            @test Facil.unbrotli(Facil.brotli(data)) == data
-            @test Facil.unbrotli(Facil.brotli(data; level = 5)) == data
+            @brtest :br Facil.unbrotli(Facil.brotli(data)) == data
+            @brtest :br Facil.unbrotli(Facil.brotli(data; level = 5)) == data
+            @test !isempty(Facil.brotli(data))
         end
         @test Facil.gunzip(Facil.gzip(TEXT_BODY)) == Vector{UInt8}(TEXT_BODY)
         @test length(Facil.gzip(TEXT_BODY)) < sizeof(TEXT_BODY) ÷ 4
@@ -69,7 +76,7 @@ const AE_ALL = ["Accept-Encoding" => "gzip, deflate, br, zstd"]
             end
             Facil.encode_finish!(sink, e)
             Facil.encoder_free!(e)
-            @test decode(string(Facil.ENCODING_NAMES[enc]), out) == repeat(src, 3)
+            @brtest enc decode(string(Facil.ENCODING_NAMES[enc]), out) == repeat(src, 3)
         end
     end
 
@@ -114,7 +121,8 @@ const AE_ALL = ["Accept-Encoding" => "gzip, deflate, br, zstd"]
                 for (ae, enc) in (("gzip", "gzip"), ("br;q=1, gzip;q=0.5", "br"), ("zstd", "zstd"))
                     r = get1(port, "/text"; headers = ["Accept-Encoding" => ae])
                     @test r["content-encoding"] == enc
-                    @test String(decode(enc, r.body)) == TEXT_BODY
+                    @brtest enc String(decode(enc, r.body)) == TEXT_BODY
+                    enc == "br" && @test r.body == Facil.brotli(TEXT_BODY)
                 end
                 r = get1(port, "/text")
                 @test !haskey(r, "content-encoding") && r["vary"] == "accept-encoding"
@@ -142,13 +150,13 @@ const AE_ALL = ["Accept-Encoding" => "gzip, deflate, br, zstd"]
                 @test r["content-encoding"] == "zstd"
                 @test String(decode("zstd", r.body)) == TEXT_BODY^50
                 r = get1(port, "/stream"; headers = ["Accept-Encoding" => "br"])
-                @test String(decode("br", r.body)) == TEXT_BODY^50
+                @brtest "br" String(decode("br", r.body)) == TEXT_BODY^50
                 r = get1(port, "/stream")
                 @test !haskey(r, "content-encoding") && String(r.body) == TEXT_BODY^50
                 for alg in ("gzip", "br", "zstd")
                     r = get1(port, "/forced/$alg")
                     @test r["content-encoding"] == alg
-                    @test String(decode(alg, r.body)) == TEXT_BODY
+                    @brtest alg String(decode(alg, r.body)) == TEXT_BODY
                 end
                 r = get1(port, "/stream-none"; headers = AE_ALL)
                 @test !haskey(r, "content-encoding") && String(r.body) == TEXT_BODY

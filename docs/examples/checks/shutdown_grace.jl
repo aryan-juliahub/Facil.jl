@@ -11,6 +11,7 @@ r = http(ex, "POST", "/shutdown")
 # The process ends once the server has closed, well inside the 5 s grace.
 @test wait_until(() -> process_exited(ex.proc); timeout = 10)
 @test time() - t < 4
+ex.proc.exitcode == 0 || println("exit status ", ex.proc.exitcode, "; output:\n", parentmodule(typeof(ex)).output(ex))
 @test ex.proc.exitcode == 0
 @test occursin("server closed; cleaning up", parentmodule(typeof(ex)).output(ex))
 @test_throws Base.IOError connect("127.0.0.1", ex.port)

@@ -272,6 +272,13 @@ function brotli_decode(lib::Ptr{Cvoid}, src::Vector{UInt8})
     out
 end
 
+"Whether [`unbrotli`](@ref) has a decoder that works on this machine."
+brotli_decoder_works() = try
+    brotli_decoder() != C_NULL
+catch
+    false
+end
+
 "Decompresses brotli data."
 unbrotli(data::AbstractVector{UInt8}) = brotli_decode(brotli_decoder(), Vector{UInt8}(data))
 

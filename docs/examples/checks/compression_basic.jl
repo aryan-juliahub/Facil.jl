@@ -8,7 +8,9 @@ gz = http(ex, "GET", "/"; headers = ["Accept-Encoding" => "gzip"])
 z = http(ex, "GET", "/"; headers = ["Accept-Encoding" => "gzip, br, zstd"])
 @test z.headers["content-encoding"] == "zstd" && String(Facil.unzstd(bytes(z))) == example.PAGE
 br = http(ex, "GET", "/"; headers = ["Accept-Encoding" => "gzip, br"])
-@test br.headers["content-encoding"] == "br" && String(Facil.unbrotli(bytes(br))) == example.PAGE
+@test br.headers["content-encoding"] == "br" && bytes(br) == Facil.brotli(example.PAGE)
+# Not every platform has a working brotli decoder (see Platform support).
+Facil.brotli_decoder_works() && @test String(Facil.unbrotli(bytes(br))) == example.PAGE
 # q-values win over the server's order.
 q = http(ex, "GET", "/"; headers = ["Accept-Encoding" => "zstd;q=0.1, gzip;q=0.9"])
 @test q.headers["content-encoding"] == "gzip"
