@@ -3,8 +3,11 @@
 ## Platform
 
 - HTTP/1.1 only. No HTTP/2 or HTTP/3.
-- Tested on macOS (Apple silicon) with Julia 1.13. Linux builds are not yet
-  tested. Windows is not supported (facil.io needs POSIX).
+- Linux and macOS only; CI tests Linux x86_64 and macOS (arm64 and x86_64) on
+  Julia 1.10 and the latest release. Windows is not supported because facil.io
+  has no Windows port: run Facil inside WSL2. Loading or building Facil on
+  Windows stops with an error saying so.
+- HttpTypes is pure Julia and works natively on Windows (tested in CI).
 - Until `facil_julia_jll` is published, installing needs a C compiler.
 
 ## Requests

@@ -6,6 +6,8 @@
 # which src/libfjl.jl also looks in. Under Pkg.build it does nothing once
 # facil_julia_jll is a dependency, unless FACIL_JL_LOCAL_BUILD=1.
 
+Sys.iswindows() && error("Facil.jl requires Linux or macOS (facil.io has no Windows support); on Windows use WSL2. HttpTypes.jl works on Windows.")
+
 using Libdl, SHA, OpenSSL_jll, Scratch, TOML
 
 const DEPS = @__DIR__

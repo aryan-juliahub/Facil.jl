@@ -3,7 +3,8 @@
 Common HTTP types for Julia: methods, status codes, versions, header names and values,
 a header multimap, URIs, extensions, requests and responses. It is a pure-Julia port of
 the Rust [`http`](https://github.com/hyperium/http) crate, version 1.5.0, with the
-crate's validation rules and its tests. No dependencies; Julia 1.10 or later.
+crate's validation rules and its tests. No dependencies; Julia 1.10 or later, on
+Linux, macOS and Windows.
 
 ## Install
 

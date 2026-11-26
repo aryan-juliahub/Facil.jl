@@ -1,3 +1,6 @@
+const UNSUPPORTED_OS = "Facil.jl requires Linux or macOS (facil.io has no Windows support); on Windows use WSL2. HttpTypes.jl works on Windows."
+Sys.iswindows() && error(UNSUPPORTED_OS)
+
 const LIBNAME = "libfacil_julia." * Libdl.dlext
 const FACIL_UUID = Base.PkgId(@__MODULE__).uuid
 const LOCAL_LIB = joinpath(dirname(@__DIR__), "deps", "usr", "lib", LIBNAME)
@@ -43,6 +46,7 @@ const libfjl_handle = Ref{Ptr{Cvoid}}(C_NULL)
 libfjl_missing() = LIBFJL isa AbstractString && isabspath(LIBFJL) && !isfile(LIBFJL)
 
 function load_libfjl()
+    Sys.iswindows() && error(UNSUPPORTED_OS)
     build = joinpath(dirname(@__DIR__), "deps", "build.jl")
     libfjl_missing() && error("Facil: $(LIBFJL) is missing; build it with `julia --project=$(dirname(@__DIR__)) $build`, or set the `libfacil_path` preference")
     libfjl_handle[] = Libdl.dlopen(LIBFJL, Libdl.RTLD_NOW | Libdl.RTLD_GLOBAL)

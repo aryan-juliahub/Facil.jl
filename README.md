@@ -25,7 +25,10 @@ julia --project -e 'using Pkg; Pkg.instantiate()'
 julia --project deps/build.jl
 ```
 
-Julia 1.10 or later. Tested on macOS (Apple silicon). Linux is not yet tested.
+Julia 1.10 or later on Linux or macOS; CI tests Linux x86_64 and macOS (arm64 and
+x86_64). Windows is not supported (facil.io has no Windows port): on Windows, run
+Facil inside WSL2. HttpTypes (`lib/HttpTypes`) is pure Julia and works natively on
+Windows.
 
 ## Hello world
 
@@ -380,7 +383,8 @@ prototype Facil server and `autocannon -c 100 -w 4`: empty reply 236,422 against
 
 ## Known limits
 
-- HTTP/1.1 only. Linux is not yet tested; Windows is not supported.
+- HTTP/1.1 only. Linux and macOS only; on Windows use WSL2 (HttpTypes alone runs
+  natively on Windows).
 - facil.io limits: about 8 KiB per header line and 128 headers (431 above them);
   a `Host` header is required (400 without it).
 - facil.io adds `date`, `last-modified` and `connection` when absent; Facil always

@@ -37,7 +37,10 @@ julia --project -e 'using Pkg; Pkg.instantiate()'
 julia --project deps/build.jl
 ```
 
-Julia 1.10 or later. Tested on macOS (Apple silicon). Linux is not yet tested.
+Julia 1.10 or later on Linux or macOS; CI tests Linux x86_64 and macOS (arm64 and
+x86_64). Windows is not supported (facil.io has no Windows port): on Windows, run
+Facil inside WSL2. HttpTypes (`lib/HttpTypes`) is pure Julia and works natively on
+Windows.
 
 ## Where to go next
 

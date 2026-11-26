@@ -73,6 +73,36 @@ jobs:
             ~/.julia/logs/
           if-no-files-found: ignore
 
+  # facil.io has no Windows port, so Windows tests HttpTypes alone and checks that
+  # building or loading Facil stops with the WSL2 message.
+  httptypes-windows:
+    name: HttpTypes - Julia ${{ matrix.julia }} - windows-latest
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        julia: ['1.10', '1']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia }}
+      - uses: julia-actions/cache@v2
+      - name: Test HttpTypes
+        run: julia --project=lib/HttpTypes -e 'using Pkg; Pkg.test()'
+      - name: Facil fails with the WSL2 message
+        if: matrix.julia != '1.10'
+        shell: bash
+        env:
+          JULIA_PKG_PRECOMPILE_AUTO: '0'
+        run: |
+          julia --project=. -e 'using Pkg; Pkg.instantiate()'
+          ! julia --project=. -e 'using Pkg; Pkg.build()' > build.log 2>&1
+          grep -q 'on Windows use WSL2' build.log || { cat build.log; exit 1; }
+          ! julia --project=. -e 'using Facil' > load.log 2>&1
+          grep -q 'on Windows use WSL2' load.log || { cat load.log; exit 1; }
+
   # The patch suites drive the merged facil.io objects directly; on Linux they are
   # the only run of the epoll, sendfile and timerfd paths.
   patches-linux:

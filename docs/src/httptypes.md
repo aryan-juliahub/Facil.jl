@@ -3,8 +3,9 @@
 HttpTypes is a pure-Julia port of the Rust [`http`](https://github.com/hyperium/http)
 crate, version 1.5.0: methods, status codes, versions, header names and values, a
 header multimap, URIs, extensions, requests and responses. It keeps the crate's
-validation rules and its tests. It has no dependencies and can be used without
-Facil (`lib/HttpTypes` in the repository). Facil re-exports all of its names.
+validation rules and its tests. It has no dependencies, works on Windows as well as
+Linux and macOS, and can be used without Facil (`lib/HttpTypes` in the repository).
+Facil re-exports all of its names.
 
 ## Rust to Julia
 
