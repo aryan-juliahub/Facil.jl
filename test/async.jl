@@ -232,7 +232,7 @@ function scenario_tasks(p)
         @test curl(url(p, "/hello")) == "hello"
 
         # Closing the server while handlers are paused.
-        tasks = [Threads.@spawn curl_status(url(p, "/fsleep/1.0")) for _ in 1:20]
+        tasks = [Threads.@spawn curl_status(url(p, "/fsleep/3.0")) for _ in 1:20]
         @test wait_until(() -> F.paused_requests() == 20; timeout = 10)
         close(srv)
         @test timedwait(() -> !isopen(srv) && (@atomic srv.state) == F.CLOSED, 10.0) === :ok
