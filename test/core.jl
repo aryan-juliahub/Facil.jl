@@ -448,6 +448,8 @@ end
         kill(p2, Base.SIGINT)
         t = time()
         @test wait_until(() -> !process_running(p2), 10.0)
+        # A process that is still there prints where its threads are (SIGQUIT).
+        process_running(p2) && (kill(p2, Base.SIGQUIT); sleep(3))
         process_running(p2) && kill(p2, Base.SIGKILL)
         println("SIGINT with exit_on_sigint: exited in $(round(time() - t, digits = 2)) s")
         @test !success(p2)
