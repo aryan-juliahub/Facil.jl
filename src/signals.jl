@@ -50,10 +50,19 @@ function drain_server!(@nospecialize(s::Server), grace::Real)
         return nothing
     end
     note(s, "closing :$(s.port), giving open requests up to $(grace) s")
-    errormonitor(@async begin
-        timedwait(() -> (@atomic s.state) == CLOSED, Float64(grace); pollint = 0.05)
+    Threads.@spawn grace_watch($s, $(Float64(grace)))
+    nothing
+end
+
+# Reports its own errors: a monitor task would first run, and be compiled,
+# when this one ends, which is when a program that waited for the server exits.
+function grace_watch(@nospecialize(s::Server), grace::Float64)
+    try
+        timedwait(() -> (@atomic s.state) == CLOSED, grace; pollint = 0.05)
         (@atomic s.state) == CLOSED || force_close(s)
-    end)
+    catch e
+        callback_error("closing a server after its grace period", e, catch_backtrace())
+    end
     nothing
 end
 

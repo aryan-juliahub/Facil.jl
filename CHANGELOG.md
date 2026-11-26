@@ -81,10 +81,14 @@ First version. Nothing has been released or registered yet.
     frames), no longer per type alone.
   - `Facil.Timer` has a `show` method.
 - aarch64 Linux is tested in CI. There the brotli decoder of `brotli_jll`
-  (every version from 1.0.9 to 1.2.1) rejects valid streams, while its
-  encoder's output is byte-identical to other platforms; `Facil.unbrotli`
-  now checks the decoder once and uses the system's `libbrotlidec` when the
-  check fails. Compression is not affected.
+  (every version from 1.0.9 to 1.2.1) rejects valid streams, also from a C
+  program, while its encoder's output is byte-identical to other platforms.
+  `Facil.unbrotli` checks the decoder once and throws a clear error there
+  (`Facil.brotli_decoder_works()` tells in advance); the tests record their
+  brotli round trips as broken on that platform. Compression is not affected.
+- `close(server; grace)` no longer leaves a monitor task to be compiled when
+  the server finishes closing; a program that exited at that moment could
+  hang in Julia's exit (seen about once in 20 runs of the shutdown examples).
 - Installing: `Pkg.add` by URL works. The facil.io git submodule is gone (Pkg
   cannot check out a repository that has one); the pinned sources are
   downloaded and verified instead (`deps/fetch_facil.sh` for the patch

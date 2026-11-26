@@ -64,12 +64,13 @@ Every push runs, on GitHub Actions:
 
 The [benchmarks](benchmarks.md) were measured on macOS only.
 
-On aarch64 Linux the brotli *decoder* that Julia's `brotli_jll` package ships
-rejects valid input (its encoder is fine, and Facil's responses are
-byte-identical to those on other platforms). Facil only decodes brotli in
-`Facil.unbrotli`, a helper for tests and clients; it detects the fault and
-uses the system's `libbrotlidec` (package `libbrotli1` on Debian and Ubuntu)
-instead.
+On aarch64 Linux the brotli *decoder* in Julia's `brotli_jll` package (every
+version from 1.0.9 to 1.2.1) rejects valid input, also when it is called from
+a C program; the encoder is fine, and Facil's brotli responses there are
+byte-identical to those on other platforms. Facil only decodes brotli in
+`Facil.unbrotli`, a helper for tests and clients. It checks the decoder once
+and throws a clear error on that platform; `Facil.brotli_decoder_works()`
+tells in advance. The tests record their brotli round trips as broken there.
 
 ## The C library
 

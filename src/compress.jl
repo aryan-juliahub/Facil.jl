@@ -222,9 +222,8 @@ function unzstd(data::AbstractVector{UInt8})
     out
 end
 
-# brotli_jll's decoder rejects valid streams on some platforms (seen on
-# aarch64 Linux), so the decoder is checked once and the system's is used
-# when it fails that check.
+# brotli_jll's decoder rejects valid streams on aarch64 Linux (its own binary
+# does, also when called from C), so it is checked once before it is trusted.
 const BROTLI_SAMPLE = (hex2bytes("1b03010004d4c3ebed7d97b211ca2c068ce6d8042a5f9f15"), "hello brotli "^20)
 const BROTLI_DECODER = Ref{Ptr{Cvoid}}(C_NULL)
 const BROTLI_DECODER_LOCK = ReentrantLock()
@@ -233,17 +232,14 @@ function brotli_decoder()
     BROTLI_DECODER[] == C_NULL || return BROTLI_DECODER[]
     lock(BROTLI_DECODER_LOCK) do
         BROTLI_DECODER[] == C_NULL || return BROTLI_DECODER[]
-        for name in (libbrotlidec, "libbrotlidec.so.1", "libbrotlidec")
-            h = Libdl.dlopen(name; throw_error = false)
-            h === nothing && continue
-            ok = try
-                String(brotli_decode(h, BROTLI_SAMPLE[1])) == BROTLI_SAMPLE[2]
-            catch
-                false
-            end
-            ok && return BROTLI_DECODER[] = h
+        h = Libdl.dlopen(libbrotlidec)
+        ok = try
+            String(brotli_decode(h, BROTLI_SAMPLE[1])) == BROTLI_SAMPLE[2]
+        catch
+            false
         end
-        error("unbrotli: the brotli decoder of brotli_jll rejects valid input on this platform and the system has no working libbrotlidec; Facil's brotli compression is not affected")
+        ok || error("unbrotli: the brotli decoder of brotli_jll rejects valid input on this platform; Facil's brotli compression is not affected")
+        BROTLI_DECODER[] = h
     end
 end
 
