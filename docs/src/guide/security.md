@@ -61,7 +61,8 @@ Points to know:
 - **A handler is not cancelled when its client disconnects** (see
   [Errors and logging](errors.md#A-client-that-goes-away)). An endpoint that
   starts expensive work on every request can be made to do that work with
-  cheap, abandoned requests. Bound such work yourself.
+  cheap, abandoned requests. Bound such work yourself, or stop it with
+  [`isconnected`](@ref) in a task handler.
 
 ## Request parsing
 
@@ -104,8 +105,9 @@ With `public_folder`, Facil serves files below that directory.
 - **Symbolic links are followed** by default, including links that point
   outside the folder. `symlinks = :inside` refuses files that resolve outside
   it.
-- Files whose names start with a dot are served by default. Keep `.env`,
-  `.git` and similar out of the folder, or pass `dotfiles = :deny`.
+- A path with a part that starts with a dot (`.env`, `.git/config`) is not
+  served by default (`dotfiles = :deny`); `.well-known` is the exception.
+  `dotfiles = :serve` serves them.
 - [`sendfile`](@ref)`(path)` sends exactly the path you give it. If any part of
   that path comes from the request, check it: reject `..`, absolute paths and
   NUL bytes, or look the name up in a list of known files.
@@ -162,11 +164,11 @@ tokens from the environment or a secret store, never from source code.
 ## Behind a reverse proxy
 
 Facil does not interpret `x-forwarded-for`, `x-forwarded-proto`, `forwarded`
-or the PROXY protocol, and it does not expose the address of the connected
-client at all. Consequences:
+or the PROXY protocol: [`client_address`](@ref) is the peer of the TCP
+connection, which behind a proxy is the proxy. Consequences:
 
-- If you need the client's address (for logs or rate limits), have your proxy
-  set a header and read it in the handler. Trust that header only if the
+- If you need the original client's address (for logs or rate limits), have
+  your proxy set a header and read it in the handler. Trust that header only if the
   server is reachable through the proxy alone: bind to `127.0.0.1` (the
   default host) or a private address, not `0.0.0.0`.
 - Have the proxy strip or overwrite forwarding headers sent by clients.

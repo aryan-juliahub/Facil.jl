@@ -77,6 +77,9 @@ fjl_server_s *fjl_http_server_new(const fjl_listen_s *o,
     st->public_folder_length = strlen(o->public_folder);
     st->public_folder = strdup(o->public_folder);
     st->public_folder_flags = o->public_folder_flags;
+    if (o->cache_control)
+      st->public_cache_control =
+          (uintptr_t)fiobj_str_new(o->cache_control, strlen(o->cache_control));
   }
   s->on_finish = o->on_finish;
   s->on_release = on_release;
@@ -94,6 +97,8 @@ void fjl_http_server_free(fjl_server_s *s) {
   if (s->settings.tls)
     fio_tls_destroy(s->settings.tls);
   free((void *)s->settings.public_folder);
+  if (s->settings.public_cache_control)
+    fiobj_free((FIOBJ)s->settings.public_cache_control);
   free(s);
 }
 
@@ -610,6 +615,35 @@ int fjl_resp_send(http_s *h, int status, const char *body, size_t len,
 int fjl_resp_error(http_s *h, int status) {
   return IS_FAKE(h) ? 0 : http_send_error(h, status);
 }
+
+/* ---- client of a request ---- */
+
+int fjl_req_peer(http_s *h, fjl_peer_s *out, int want_cert) {
+  out->ip_len = 0;
+  out->port = 0;
+  out->tls = 0;
+  out->cert = NULL;
+  out->cert_len = 0;
+  if (!h || IS_FAKE(h) || HTTP_INVALID_HANDLE(h) || !h->private_data.flag)
+    return -1;
+  const intptr_t uuid = ((http_fio_protocol_s *)h->private_data.flag)->uuid;
+  fio_str_info_s a = fio_peer_addr(uuid);
+  if (!a.data)
+    return -1;
+  size_t n = a.len < sizeof(out->ip) ? a.len : sizeof(out->ip);
+  memcpy(out->ip, a.data, n);
+  out->ip_len = (int32_t)n;
+  out->port = fio_peer_port(uuid);
+  out->tls = http_settings(h)->tls != NULL;
+  if (out->tls && want_cert) {
+    size_t len = 0;
+    out->cert = fio_tls_peer_cert_pem(uuid, &len);
+    out->cert_len = (int64_t)len;
+  }
+  return 0;
+}
+
+void fjl_free(void *p) { free(p); }
 
 /* ---- offline requests ---- */
 

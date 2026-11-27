@@ -52,8 +52,9 @@ Julia threads at once, so shared state needs a lock or atomics.
 | `req.params.id` (Express) | no router built in; see the port below and [Routing](routing.md) |
 | `req.body` after `express.json()` | `JSON.parse(body(req))` with a JSON package |
 | `req.on('data', chunk => ...)`, `req.on('end', ...)` | by default nothing to do: `body(req)` is the whole body as a `String`. To read it as it arrives, see [Request bodies](bodies.md): `before_body = head -> Stream()` and `for chunk in body_chunks(req)` |
-| `req.socket.remoteAddress`, `req.ip` | not available |
-| `req.on('close', ...)` (client went away) | not available for ordinary handlers; streams see `isopen(io) == false` |
+| `req.socket.remoteAddress`, `req.socket.remotePort` | [`client_address`](@ref)`(req)`, a named tuple `(ip, port)` |
+| `req.socket.getPeerCertificate()` | [`client_certificate`](@ref)`(req)`, PEM text |
+| `req.on('close', ...)` (client went away) | [`on_disconnect`](@ref)`(f, req)` and [`isconnected`](@ref)`(req)` in task handlers; streams see `isopen(io) == false` |
 
 Header values are [`HeaderValue`](@ref)s, not strings. They compare equal to
 strings; use `as_str(value)` when you need a `String`.

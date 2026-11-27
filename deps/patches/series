@@ -20,3 +20,5 @@
 20-http-conformance.patch
 21-websocket-shutdown.patch
 22-half-close.patch
+23-peer-info.patch
+24-static-files.patch

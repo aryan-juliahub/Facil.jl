@@ -155,4 +155,118 @@ end
     @test_throws ArgumentError sendfile("a\0b")
 end
 
+
+const CACHE_PORTS = 4110:4119
+
+# Unix time `t` as an HTTP-date: IMF-fixdate, or the obsolete RFC 850 and asctime forms.
+function httpdate(t::Integer; form = :imf)
+    days, secs = fldmod(t, 86400)
+    z = days + 719468
+    era = fld(z, 146097)
+    doe = z - era * 146097
+    yoe = (doe - doe ÷ 1460 + doe ÷ 36524 - doe ÷ 146096) ÷ 365
+    doy = doe - (365yoe + yoe ÷ 4 - yoe ÷ 100)
+    mp = (5doy + 2) ÷ 153
+    d = doy - (153mp + 2) ÷ 5 + 1
+    m = mp < 10 ? mp + 3 : mp - 9
+    y = yoe + era * 400 + (m <= 2)
+    wd = mod(days + 4, 7) + 1
+    short = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")[wd]
+    long = ("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")[wd]
+    mon = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")[m]
+    clock = join(lpad.((secs ÷ 3600, secs % 3600 ÷ 60, secs % 60), 2, '0'), ':')
+    form === :imf && return "$short, $(lpad(d, 2, '0')) $mon $y $clock GMT"
+    form === :rfc850 && return "$long, $(lpad(d, 2, '0'))-$mon-$(lpad(y % 100, 2, '0')) $clock GMT"
+    "$short $mon $(lpad(d, 2)) $clock $y"
+end
+
+@testset "static: cache-control, If-Modified-Since, directories, dotfiles" begin
+    dir = mktempdir()
+    write(joinpath(dir, "a.txt"), "AAA")
+    mkpath(joinpath(dir, "docs"))
+    write(joinpath(dir, "docs", "index.html"), "<p>docs</p>")
+    mkpath(joinpath(dir, "empty"))
+    write(joinpath(dir, ".env"), "KEY=1")
+    mkpath(joinpath(dir, ".well-known"))
+    write(joinpath(dir, ".well-known", "security.txt"), "Contact: x")
+    mkpath(joinpath(dir, ".git"))
+    write(joinpath(dir, ".git", "config"), "cfg")
+    handler(req) = Response(200, "handler " * path(uri(req)))
+
+    srv = serve!(handler, CACHE_PORTS[1]; public_folder = dir)
+    try
+        p = port(srv)
+        r = get1(p, "/a.txt")
+        @test r.status == 200 && r["cache-control"] == "max-age=3600"
+        lm = r["last-modified"]
+        mtime = floor(Int, Base.Filesystem.mtime(joinpath(dir, "a.txt")))
+        @test lm == httpdate(mtime)
+
+        # If-Modified-Since: not newer gives 304, newer gives the file
+        @test get1(p, "/a.txt"; headers = ["If-Modified-Since" => lm]).status == 304
+        r = get1(p, "/a.txt"; headers = ["If-Modified-Since" => httpdate(mtime + 60)])
+        @test r.status == 304 && isempty(r.body) && haskey(r, "etag")
+        r = get1(p, "/a.txt"; headers = ["If-Modified-Since" => httpdate(mtime - 60)])
+        @test r.status == 200 && String(r.body) == "AAA"
+        @test get1(p, "/a.txt"; method = "HEAD", headers = ["If-Modified-Since" => lm]).status == 304
+        # the two obsolete date forms
+        @test get1(p, "/a.txt"; headers = ["If-Modified-Since" => httpdate(mtime + 60; form = :rfc850)]).status == 304
+        @test get1(p, "/a.txt"; headers = ["If-Modified-Since" => httpdate(mtime + 60; form = :asctime)]).status == 304
+        @test get1(p, "/a.txt"; headers = ["If-Modified-Since" => httpdate(mtime - 60; form = :asctime)]).status == 200
+        # an invalid date is ignored
+        @test get1(p, "/a.txt"; headers = ["If-Modified-Since" => "yesterday"]).status == 200
+        # If-None-Match wins: a stale tag with a fresh date still sends the file
+        r = get1(p, "/a.txt"; headers = ["If-None-Match" => "\"stale\"", "If-Modified-Since" => httpdate(mtime + 60)])
+        @test r.status == 200 && String(r.body) == "AAA"
+        etag = get1(p, "/a.txt")["etag"]
+        @test get1(p, "/a.txt"; headers = ["If-None-Match" => etag, "If-Modified-Since" => httpdate(mtime - 60)]).status == 304
+
+        # a directory without its slash: 301 to the slash, query kept, when it has an index
+        r = get1(p, "/docs")
+        @test r.status == 301 && r["location"] == "/docs/"
+        r = get1(p, "/docs?a=1&b=2")
+        @test r.status == 301 && r["location"] == "/docs/?a=1&b=2"
+        @test get1(p, "/docs"; method = "HEAD").status == 301
+        @test String(get1(p, "/docs/").body) == "<p>docs</p>"
+        @test String(get1(p, "/empty").body) == "handler /empty"
+        @test String(get1(p, "/docs"; method = "POST", body = "x").body) == "handler /docs"
+
+        # dotfiles are denied by default, .well-known is not
+        @test String(get1(p, "/.env").body) == "handler /.env"
+        @test String(get1(p, "/.git/config").body) == "handler /.git/config"
+        @test String(get1(p, "/%2eenv").body) == "handler /%2eenv"
+        @test String(get1(p, "/.well-known/security.txt").body) == "Contact: x"
+        @test String(get1(p, "/.well-knownx/security.txt").body) == "handler /.well-knownx/security.txt"
+    finally
+        close(srv); wait(srv)
+    end
+
+    srv = serve!(handler, CACHE_PORTS[2]; public_folder = dir, dotfiles = :serve,
+                 static_cache_control = "public, max-age=31536000, immutable")
+    try
+        p = port(srv)
+        r = get1(p, "/a.txt")
+        @test r["cache-control"] == "public, max-age=31536000, immutable"
+        @test String(get1(p, "/.env").body) == "KEY=1"
+        # sendfile responses keep the default
+        @test String(get1(p, "/x").body) == "handler /x"
+    finally
+        close(srv); wait(srv)
+    end
+
+    srv = serve!(handler, CACHE_PORTS[3]; public_folder = dir, static_cache_control = nothing)
+    try
+        r = get1(port(srv), "/a.txt")
+        @test r.status == 200 && !haskey(r, "cache-control")
+    finally
+        close(srv); wait(srv)
+    end
+
+    @test_throws ArgumentError serve!(handler, CACHE_PORTS[4]; static_cache_control = "no-cache")
+    @test_throws ArgumentError serve!(handler, CACHE_PORTS[4]; dotfiles = :serve)
+    @test_throws ArgumentError serve!(handler, CACHE_PORTS[4]; public_folder = dir, static_cache_control = "a\r\nb: c")
+    @test_throws ArgumentError serve!(handler, CACHE_PORTS[4]; public_folder = dir, static_cache_control = "")
+    @test_throws ArgumentError serve!(handler, CACHE_PORTS[4]; public_folder = dir, static_cache_control = 3600)
+end
+
 end

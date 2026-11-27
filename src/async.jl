@@ -7,6 +7,7 @@ const RESULT_LOCKS = [Threads.SpinLock() for _ in 1:RESULT_SHARDS]
 const NEXT_ID = Threads.Atomic{UInt64}(0)
 const ON_RESUME = Ref{Ptr{Cvoid}}(C_NULL)
 const ON_DROP = Ref{Ptr{Cvoid}}(C_NULL)
+const ON_GONE = Ref{Ptr{Cvoid}}(C_NULL)
 const DROPPED = Threads.Atomic{Int}(0)
 
 @inline shard(id::UInt64) = (id % RESULT_SHARDS) % Int + 1
@@ -154,22 +155,28 @@ end
 
 function handle_async(@nospecialize(srv::Server), h::Ptr{Cvoid}, req)
     id = Threads.atomic_add!(NEXT_ID, UInt64(1)) + UInt64(1)
+    c = read_connection(h, CONN_PAUSED)
     a = async_pause(h, id)
     if a == C_NULL
         fail(h, 503)
         return nothing
     end
-    submit(() -> run_handler(srv, req, a, id))
+    if c !== nothing
+        c.a, c.id = a, id
+        insert!(extensions(req), c)
+    end
+    submit(() -> run_handler(srv, req, a, id, c))
     nothing
 end
 
-function run_handler(@nospecialize(srv::Server), req, a::Ptr{Cvoid}, id::UInt64)
+function run_handler(@nospecialize(srv::Server), req, a::Ptr{Cvoid}, id::UInt64, c::Union{Nothing,Connection})
     res = try
         srv.handler(req)
     catch e
         log_error("a request handler", e, catch_backtrace())
         HandlerFailed()
     end
+    c === nothing || conn_done!(c)
     put_result!(id, res)
     async_done(a)
     nothing
@@ -219,6 +226,7 @@ end
 function init_async()
     ON_RESUME[] = @cfunction(on_resume, Cvoid, (Ptr{Cvoid}, UInt64))
     ON_DROP[] = @cfunction(on_drop, Cvoid, (UInt64,))
-    @ccall LIBFJL.fjl_async_init(ON_RESUME[]::Ptr{Cvoid}, ON_DROP[]::Ptr{Cvoid})::Cvoid
+    ON_GONE[] = @cfunction(on_client_gone, Cvoid, (UInt64,))
+    @ccall LIBFJL.fjl_async_init(ON_RESUME[]::Ptr{Cvoid}, ON_DROP[]::Ptr{Cvoid}, ON_GONE[]::Ptr{Cvoid})::Cvoid
     nothing
 end

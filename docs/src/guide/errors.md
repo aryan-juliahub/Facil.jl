@@ -169,9 +169,10 @@ Errors in how you call Facil are thrown to you, not logged:
 
 ## A client that goes away
 
-Facil does not tell a handler that its client has disconnected. The handler
-runs to the end and its response is discarded. There is no cancellation, so
-bound the work a single request can cause.
+A handler is not stopped when its client disconnects. The handler runs to
+the end and its response is discarded, unless a task handler checks
+[`isconnected`](@ref) or registers [`on_disconnect`](@ref) and stops itself.
+Bound the work a single request can cause either way.
 
 Long-lived responses do notice: for [`stream`](@ref), `isopen(io)` turns
 `false` and `write` throws an `IOError`; for [`sse`](@ref), `isopen(s)` turns

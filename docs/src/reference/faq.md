@@ -184,8 +184,9 @@ want cached.
 
 ### How do I get the client's IP address?
 
-You cannot yet: Facil does not expose the peer address of a connection.
-Behind a reverse proxy, read the `x-forwarded-for` header the proxy sets.
+[`client_address`](@ref)`(req)` returns `(ip = "203.0.113.7", port = 51234)`.
+Behind a reverse proxy that is the proxy's address: read the
+`x-forwarded-for` header the proxy sets instead.
 
 ### How do I read a query parameter or a decoded path?
 

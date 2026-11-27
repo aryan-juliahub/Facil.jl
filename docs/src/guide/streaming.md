@@ -98,8 +98,8 @@ is simply ended and nothing is logged. So a plain loop of writes stops by
 itself. Check `isopen(io)` in loops that do expensive work between writes, as
 the export example does, so that the work stops too.
 
-This is the only place where a handler can notice a disconnect: a handler that
-returns an ordinary `Response` is never told.
+A task handler that returns an ordinary `Response` can notice it too, with
+[`isconnected`](@ref) or [`on_disconnect`](@ref).
 
 ## When the function throws
 

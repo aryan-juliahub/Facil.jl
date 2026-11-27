@@ -17,9 +17,10 @@ part = http(ex, "GET", "/index.html"; headers = ["Range" => "bytes=0-14"])
 @test http(ex, "GET", "/index.html"; headers = ["Range" => "bytes=99999-"]).status == 416
 h = http(ex, "HEAD", "/index.html")
 @test h.status == 200 && h.body == "" && h.headers["content-length"] == string(sizeof(r.body))
-# Folders: /docs/ serves docs/index.html, /docs reaches the handler.
+# Folders: /docs/ serves docs/index.html, /docs is redirected there.
 @test http(ex, "GET", "/docs/").body == "docs index\n"
-@test http(ex, "GET", "/docs").status == 404
+d = http(ex, "GET", "/docs?x=1")
+@test d.status == 301 && d.headers["location"] == "/docs/?x=1"
 # Percent-encoded names are decoded; paths with .. are not served.
 @test http(ex, "GET", "/release%20notes.txt").body == "notes\n"
 @test http(ex, "GET", "/../reports/q3.csv").status == 404
@@ -40,7 +41,7 @@ ir = http(ex, "GET", "/index.html"; headers = ["Range" => "bytes=0-14", "If-Rang
 @test ir.status == 206 && ir.body == "<!doctype html>"
 ir = http(ex, "GET", "/index.html"; headers = ["Range" => "bytes=0-14", "If-Range" => "\"stale\""])
 @test ir.status == 200 && ir.body == r.body
-# If-Modified-Since is ignored; several ranges give the whole file.
-@test http(ex, "GET", "/index.html"; headers = ["If-Modified-Since" => r.headers["last-modified"]]).status == 200
+# If-Modified-Since gives a 304 for an unchanged file; several ranges give the whole file.
+@test http(ex, "GET", "/index.html"; headers = ["If-Modified-Since" => r.headers["last-modified"]]).status == 304
 @test http(ex, "GET", "/index.html"; headers = ["Range" => "bytes=0-0,2-2"]).status == 200
 @test http(ex, "OPTIONS", "/reports/q3.csv").headers["allow"] == "GET, HEAD"

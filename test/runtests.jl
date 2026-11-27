@@ -23,5 +23,6 @@ using Test
     include("names.jl")
     include("url.jl")
     include("cookies.jl")
+    include("client.jl")
     include("docs_examples.jl")
 end

@@ -47,7 +47,7 @@ function server_options(kw::Dict{Symbol,Any})
 end
 
 const SERVE_KEYWORDS = (fieldnames(ServerOptions)..., :tls, :public_folder, :dotfiles, :symlinks,
-                        :compress, :gc_headroom)
+                        :static_cache_control, :compress, :gc_headroom)
 
 function edit_distance(a::AbstractString, b::AbstractString)
     x, y = collect(a), collect(b)
@@ -284,13 +284,17 @@ function handle(@nospecialize(srv::Server), h::Ptr{Cvoid})
     req === nothing && return nothing
     req isa StreamRun && return handle_stream_async(h, req)
     srv.options.inline || return handle_async(srv, h, req)
+    inline_begin(req, h)
     res = try
         srv.handler(req)
     catch e
+        inline_end()
         log_error("a request handler", e, catch_backtrace())
         fail(h, 500)
         return nothing
     end
+    res isa Response{String} || res isa Response{Nothing} || keep_connection!(req, res)
+    inline_end()
     try
         res isa Response{String} ? respond(h, res) : respond(h, res)
     catch e
@@ -398,10 +402,17 @@ Responses:
 - `public_folder::Union{Nothing,AbstractString} = nothing`: a directory whose
   files are served for `GET`, `HEAD` and `OPTIONS` before the handler is
   called; requests that match no file reach the handler. See [`sendfile`](@ref)
-  for the headers. A path with an encoded NUL (`%00`) gets a `400`.
-- `dotfiles::Symbol = :serve`: `:deny` does not serve a file whose path has a
-  part that starts with a dot (`.env`, `.git/config`); such a request reaches
-  the handler as if the file did not exist. Needs `public_folder`.
+  for the headers. A path with an encoded NUL (`%00`) gets a `400`. A
+  directory asked for without its trailing slash gets a `301` to the path
+  with the slash when it has an `index.html`.
+- `dotfiles::Symbol = :deny`: does not serve a file whose path has a part
+  that starts with a dot (`.env`, `.git/config`); such a request reaches the
+  handler as if the file did not exist. A `.well-known` part (RFC 8615) is
+  served all the same. `:serve` serves dotfiles too. Needs `public_folder`.
+- `static_cache_control = "max-age=3600"`: the `cache-control` header sent
+  with `public_folder` files, for example `"public, max-age=31536000,
+  immutable"` for fingerprinted assets or `"no-cache"` to make clients
+  revalidate every time; `nothing` sends none. Needs `public_folder`.
 - `symlinks::Symbol = :follow`: `:inside` does not serve a file that resolves,
   through symbolic links, to a place outside `public_folder`; such a request
   reaches the handler. Needs `public_folder`.
@@ -425,8 +436,9 @@ client may connect at once.
 # Throws
 - `ArgumentError`: an unknown keyword (the message names the closest valid
   one), a keyword out of range, `port` outside `0:65535`, a NUL in
-  `host`, `public_folder` that is not a directory, `dotfiles` or `symlinks`
-  with another value or without `public_folder`, `tls` that is not a
+  `host`, `public_folder` that is not a directory, `dotfiles`, `symlinks`
+  or `static_cache_control` with another value or without `public_folder`,
+  `tls` that is not a
   `TLSConfig`, `tls` with `reactors > 1`, or `reactors` different from the
   reactor already running.
 - `SystemError`: the address could not be bound, for example
@@ -452,8 +464,11 @@ client may connect at once.
 - A response body is sent without a copy. Do not change a `Vector{UInt8}`
   after returning it.
 - A `HEAD` request gets the head your handler produced, without the body.
-- A client that disconnects while its handler runs is not noticed: the
-  handler finishes and its result is discarded.
+- A client that disconnects while its handler runs does not stop the
+  handler: it finishes and its result is discarded. A task handler can ask
+  with [`isconnected`](@ref) or [`on_disconnect`](@ref).
+- [`client_address`](@ref) and [`client_certificate`](@ref) tell who sent
+  the request.
 
 # Examples
 ```jldoctest
@@ -507,15 +522,18 @@ end
 # handler and keyword combination a script passes.
 function start_server(@nospecialize(handler), h::String, port::Int, kw::Dict{Symbol,Any})
     public_folder = get(kw, :public_folder, nothing)::Union{Nothing,AbstractString}
-    dotfiles = get(kw, :dotfiles, :serve)::Symbol
+    dotfiles = get(kw, :dotfiles, :deny)::Symbol
     symlinks = get(kw, :symlinks, :follow)::Symbol
+    check_static_keywords(public_folder, kw)
+    cache_control = static_cache_control(get(kw, :static_cache_control, DEFAULT_CACHE_CONTROL))
     gc_headroom = get(kw, :gc_headroom, 0)::Integer
     tls = get(kw, :tls, nothing)
     opts = server_options(kw)
     gc_headroom > 0 && gc_headroom!(gc_headroom)
     handler = wrap_handler(handler, compress_options(get(kw, :compress, false)))
     folder = static_folder(public_folder, symlinks)
-    folder_flags = static_flags(public_folder, dotfiles, symlinks)
+    folder_flags = static_flags(dotfiles, symlinks) |
+                   (cache_control === nothing ? PUBLIC_NO_CACHE_CONTROL : 0x00)
     tls === nothing || check_tls_options(tls, opts)
     0 <= port <= 65535 || throw(ArgumentError("port must be in 0:65535"))
     occursin('\0', h) && throw(ArgumentError("host must not contain NUL"))
@@ -533,8 +551,9 @@ function start_server(@nospecialize(handler), h::String, port::Int, kw::Dict{Sym
                            max_header_size = opts.max_header_size, max_body_size = opts.max_body_size,
                            timeout = opts.timeout, log = false, tls = ctls,
                            public_folder = folder === nothing ? Ptr{UInt8}(C_NULL) : pointer(folder),
-                           public_folder_flags = folder_flags)
-        cs = GC.@preserve folder @ccall LIBFJL.fjl_http_server_new(Ref(lo)::Ptr{ListenOptions}, ON_RELEASE[]::Ptr{Cvoid})::Ptr{Cvoid}
+                           public_folder_flags = folder_flags,
+                           cache_control = cache_control isa String ? pointer(cache_control) : Ptr{UInt8}(C_NULL))
+        cs = GC.@preserve folder cache_control @ccall LIBFJL.fjl_http_server_new(Ref(lo)::Ptr{ListenOptions}, ON_RELEASE[]::Ptr{Cvoid})::Ptr{Cvoid}
         cs == C_NULL && (ctls == C_NULL || tls_free(ctls); error("Facil: could not allocate a server"))
         @atomic srv.cserver = cs
         apply_limits(cs, opts)

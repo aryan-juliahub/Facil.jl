@@ -166,7 +166,8 @@ the one you choose.
 
 - No WebSocket client.
 - No per-message access to frames, and no way to send a ping yourself.
-- The client's address is not available.
+- The client's address is [`client_address`](@ref)`(req)` in the handler
+  that returns `websocket(req; ...)`; keep it for the callbacks.
 - HTTP/1.1 upgrades only (no WebSockets over HTTP/2).
 
 ## See also

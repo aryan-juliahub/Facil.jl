@@ -43,7 +43,7 @@ end
 const LIBFJL = resolve_libfjl()
 LIBFJL isa AbstractString && isfile(LIBFJL) && include_dependency(LIBFJL)
 foreach(include_dependency, LocalBuild.build_inputs())
-const FJL_ABI = 2
+const FJL_ABI = 3
 
 const libfjl_handle = Ref{Ptr{Cvoid}}(C_NULL)
 
@@ -180,15 +180,16 @@ struct ListenOptions
     ws_timeout::UInt8
     log::UInt8
     public_folder_flags::UInt8
+    cache_control::Ptr{UInt8}
 end
 
 ListenOptions(on_request::Ptr{Cvoid}; on_upgrade=C_NULL, on_finish=C_NULL, udata=C_NULL,
               public_folder=C_NULL, max_header_size=0, max_body_size=0, max_clients=0,
               tls=C_NULL, ws_max_msg_size=0, timeout=0, ws_timeout=0, log=false,
-              public_folder_flags=0) =
+              public_folder_flags=0, cache_control=C_NULL) =
     ListenOptions(on_request, on_upgrade, on_finish, udata, public_folder, max_header_size,
                   max_body_size, max_clients, tls, ws_max_msg_size, timeout, ws_timeout, log,
-                  public_folder_flags)
+                  public_folder_flags, cache_control)
 
 """
     fjl_listen(address, port, opts) -> Int

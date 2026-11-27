@@ -68,6 +68,24 @@ int fjl_resp_send(http_s *h, int status, const char *body, size_t len,
                   void (*dealloc)(void *));
 int fjl_resp_error(http_s *h, int status);
 
+/* The client of the connection a request arrived on. `cert` is the PEM
+ * certificate a TLS client presented (a malloc block released with
+ * fjl_free), or NULL; it is only looked up when `want_cert` is set. */
+typedef struct {
+  uint8_t ip[48];
+  int32_t ip_len;
+  int32_t port;
+  int32_t tls;
+  int32_t pad;
+  char *cert;
+  int64_t cert_len;
+} fjl_peer_s;
+
+/* Fills `out` for `h` (reactor only, while `h` is valid). 0, or -1 when the
+ * connection is unknown. */
+int fjl_req_peer(http_s *h, fjl_peer_s *out, int want_cert);
+void fjl_free(void *p);
+
 /* Offline requests for the precompile workload; they never reach a socket. */
 http_s *fjl_http_fake_request(void);
 void fjl_http_fake_free(http_s *h);

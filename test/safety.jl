@@ -248,7 +248,7 @@ end
         end
         r = get1(port(s), "/"; method = "POST", body = "x"^200_000)
         @test String(copy(r.body)) == "200000"
-        @test take!(seen) == 1
+        @test take!(seen) == 2   # the body stream and the client's connection
         close(s)
     end
 

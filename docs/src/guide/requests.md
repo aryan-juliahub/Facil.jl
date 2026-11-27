@@ -178,6 +178,44 @@ insert!(extensions(req), RequestId("7f3a"))
 get(extensions(req), RequestId).value
 ```
 
+## Who sent the request
+
+[`client_address`](@ref)`(req)` is the client's address and TCP port as a
+named tuple, `(ip = "127.0.0.1", port = 52814)`. Over HTTPS with client
+certificates, [`client_certificate`](@ref)`(req)` is the certificate the
+client presented, as PEM text.
+
+A task handler that does slow work can stop when nobody waits for it any
+more: [`isconnected`](@ref)`(req)` turns `false` soon after the client
+closes its connection, and [`on_disconnect`](@ref)`(f, req)` runs `f` once
+when that happens.
+
+```@eval
+Main.example("requests_client.jl")
+```
+
+```sh
+$ curl http://127.0.0.1:8080/whoami
+you are 127.0.0.1, port 52814
+$ curl --max-time 1 http://127.0.0.1:8080/report
+$ curl http://127.0.0.1:8080/cancelled
+1 report(s) cancelled
+```
+
+- The address is the peer of the TCP connection. Behind a reverse proxy that
+  is the proxy; read the header your proxy sets (`x-forwarded-for`,
+  `forwarded`) for the original client, and trust it only from your proxy.
+- Both are captured when the request arrives, so they stay readable after
+  the connection is gone. An inline handler that returns a plain response
+  and keeps the request for later must ask while it runs.
+- `isconnected` and `on_disconnect` work in task handlers. An inline handler
+  runs on the reactor, which cannot watch the connection meanwhile: there
+  `isconnected` is always `true` and `on_disconnect` does nothing.
+- A client that only finishes sending (a half-close) still waits for the
+  answer and is not counted as gone. Telling the two apart takes one
+  `100 Continue` interim response, sent when the client's side of the
+  connection ends; see [`isconnected`](@ref).
+
 ## What Facil answers without calling your handler
 
 Some requests never reach the handler. Facil or facil.io answers them and, with
@@ -211,10 +249,10 @@ their say), then reads the body. A request it refuses gets its 413 instead, so
 the client never sends the body.
 
 !!! note "A client that goes away"
-    Facil does not tell a running handler that its client has disconnected. The
-    handler finishes and its response is dropped. Only streamed responses and
-    event streams can see it, through `isopen`; see
-    [Streaming responses](streaming.md).
+    A handler is not stopped when its client disconnects: it finishes and its
+    response is dropped. A task handler can ask with [`isconnected`](@ref) or
+    register [`on_disconnect`](@ref) (see [Who sent the request](#Who-sent-the-request));
+    streamed responses and event streams see it through `isopen`.
 
 ## See also
 

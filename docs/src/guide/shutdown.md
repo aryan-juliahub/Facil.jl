@@ -166,8 +166,9 @@ status 0. Under systemd, call the endpoint from `ExecStop=`; in Kubernetes,
 from a `preStop` hook ([Deployment](deployment.md)). SIGTERM then arrives at a
 process that is already idle or gone.
 
-Facil cannot tell you who is calling (there is no client address), so protect
-the endpoint with a secret, and do not expose it through your reverse proxy.
+Protect the endpoint with a secret, and do not expose it through your
+reverse proxy; [`client_address`](@ref) alone is not enough behind a proxy,
+where every request comes from the proxy's address.
 
 ## Ctrl-C
 

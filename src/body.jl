@@ -473,6 +473,8 @@ mutable struct StreamRun
     res::Any
     a::Ptr{Cvoid}
     id::UInt64
+    conn::Union{Nothing,Connection}
+    req::Any
 end
 
 """
@@ -700,7 +702,7 @@ function plan_body!(@nospecialize(srv::Server), h::Ptr{Cvoid}, clen::Int64, plan
             early = !srv.options.inline
             uuid = Int(@ccall LIBFJL.http1_body_uuid(h::Ptr{Cvoid})::Int)
             st.stream = BodyStream(; pausable = early, high_water = s.high_water, uuid)
-            early && start_stream_handler!(srv, st)
+            early && start_stream_handler!(srv, st, h)
         end
         set_plan!(planp, B_STREAM, 0, Ptr{UInt8}(C_NULL), put_pending!(st))
     end
@@ -710,11 +712,13 @@ end
 # Task handlers read a streamed body while it arrives: the handler starts now and
 # its result is collected once the body has ended (see handle_stream_async). The
 # request belongs to the handler from the spawn on.
-function start_stream_handler!(@nospecialize(srv::Server), st::PendingBody)
+function start_stream_handler!(@nospecialize(srv::Server), st::PendingBody, h::Ptr{Cvoid})
     req = new_request(st.head, "")
     s = st.stream::BodyStream
     insert!(extensions(req), BodyIO(s))
-    r = StreamRun(0, nothing, C_NULL, UInt64(0))
+    c = read_connection(h, CONN_RUNNING)
+    c === nothing || insert!(extensions(req), c)
+    r = StreamRun(0, nothing, C_NULL, UInt64(0), c, req)
     st.run = r
     Threads.@spawn begin
         r.res = try
@@ -725,12 +729,14 @@ function start_stream_handler!(@nospecialize(srv::Server), st::PendingBody)
         finally
             discard!(s)
         end
+        c === nothing || conn_done!(c)
         modifyfield!(r, :flags, |, 1, :acquire_release).first & 2 == 0 || finish_stream!(r)
     end
     nothing
 end
 
 function finish_stream!(r::StreamRun)
+    r.req = nothing
     put_result!(r.id, r.res)
     r.res = nothing
     async_done(r.a)
@@ -745,6 +751,8 @@ function handle_stream_async(h::Ptr{Cvoid}, r::StreamRun)
         return nothing
     end
     r.id, r.a = id, a
+    c = r.conn
+    c === nothing || conn_paused!(c, r.req, a, id)
     modifyfield!(r, :flags, |, 2, :acquire_release).first & 1 == 0 || finish_stream!(r)
     nothing
 end
@@ -910,6 +918,9 @@ function on_body_abort(udata::Ptr{Cvoid}, mode::Int32)
         st = get_pending(UInt(udata); remove = true)
         st === nothing && return nothing
         st.stream === nothing || finish!(st.stream; aborted = true)
+        if st.run !== nothing && st.run.conn !== nothing
+            conn_aborted!(st.run.conn)
+        end
         st.file === nothing || close(st.file)
         release_blocks!(st)
     catch e

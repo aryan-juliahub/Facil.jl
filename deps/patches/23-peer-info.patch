@@ -1,0 +1,142 @@
+diff --git a/lib/facil/fio.c b/lib/facil/fio.c
+--- a/lib/facil/fio.c
++++ b/lib/facil/fio.c
+@@ -200,6 +200,8 @@ typedef struct {
+   uint8_t addr_len;
+   /** peer address length */
+   uint8_t addr[48];
++  /** peer TCP port, 0 when unknown */
++  uint16_t port;
+   /** RW hooks. */
+   fio_rw_hook_s *rw_hooks;
+   /** RW udata. */
+@@ -495,6 +497,10 @@ fio_str_info_s fio_peer_addr(intptr_t uuid) {
+                           .capa = 0};
+ }
+ 
++uint16_t fio_peer_port(intptr_t uuid) {
++  return fio_is_closed(uuid) ? 0 : uuid_data(uuid).port;
++}
++
+ /**
+  * Writes the local machine address (qualified host name) to the buffer.
+  *
+@@ -3068,9 +3074,14 @@ static void fio_tcp_addr_cpy(int fd, int family, struct sockaddr *addrinfo) {
+                 (char *)fd_data(fd).addr, sizeof(fd_data(fd).addr));
+   if (result) {
+     fd_data(fd).addr_len = strlen((char *)fd_data(fd).addr);
++    fd_data(fd).port =
++        ntohs(family == AF_INET
++                  ? ((struct sockaddr_in *)addrinfo)->sin_port
++                  : ((struct sockaddr_in6 *)addrinfo)->sin6_port);
+   } else {
+     fd_data(fd).addr_len = 0;
+     fd_data(fd).addr[0] = 0;
++    fd_data(fd).port = 0;
+   }
+ }
+ 
+@@ -4378,6 +4389,12 @@ int fio_rw_hook_replace_unsafe(intptr_t uuid, fio_rw_hook_s *rw_hooks,
+   return replaced;
+ }
+ 
++void *fio_rw_hook_udata(intptr_t uuid, const fio_rw_hook_s *rw_hooks) {
++  return (!fio_is_closed(uuid) && uuid_data(uuid).rw_hooks == rw_hooks)
++             ? uuid_data(uuid).rw_udata
++             : NULL;
++}
++
+ /** Sets a socket hook state (a pointer to the struct). */
+ int fio_rw_hook_set(intptr_t uuid, fio_rw_hook_s *rw_hooks, void *udata) {
+   if (fio_is_closed(uuid))
+diff --git a/lib/facil/fio.h b/lib/facil/fio.h
+--- a/lib/facil/fio.h
++++ b/lib/facil/fio.h
+@@ -1102,6 +1102,9 @@ void fio_force_close(intptr_t uuid);
+  */
+ fio_str_info_s fio_peer_addr(intptr_t uuid);
+ 
++/** The peer's TCP port, recorded with its address; 0 when unknown. */
++uint16_t fio_peer_port(intptr_t uuid);
++
+ /**
+  * Writes the local machine address (qualified host name) to the buffer.
+  *
+@@ -1497,6 +1500,12 @@ int fio_rw_hook_set(intptr_t uuid, fio_rw_hook_s *rw_hooks, void *udata);
+ int fio_rw_hook_replace_unsafe(intptr_t uuid, fio_rw_hook_s *rw_hooks,
+                                void *udata);
+ 
++/**
++ * The udata of the connection's read/write hooks when they are `rw_hooks`,
++ * else NULL. Call from a task that holds the connection.
++ */
++void *fio_rw_hook_udata(intptr_t uuid, const fio_rw_hook_s *rw_hooks);
++
+ /** The default Read/Write hooks used for system Read/Write (udata == NULL). */
+ extern const fio_rw_hook_s FIO_DEFAULT_RW_HOOKS;
+ 
+diff --git a/lib/facil/tls/fio_tls.h b/lib/facil/tls/fio_tls.h
+--- a/lib/facil/tls/fio_tls.h
++++ b/lib/facil/tls/fio_tls.h
+@@ -122,6 +122,13 @@ int fio_tls_on_context(fio_tls_s *tls,
+ /** Returns the default `SSL_CTX`. A rebuild replaces it. */
+ void *fio_tls_ctx(fio_tls_s *tls);
+ 
++/**
++ * The certificate the peer of a TLS connection presented, as PEM text in a
++ * `malloc` block the caller frees, or NULL (no TLS, no certificate, or the
++ * handshake is not done). Call from a task that holds the connection.
++ */
++char *fio_tls_peer_cert_pem(intptr_t uuid, size_t *len);
++
+ /**
+  * Establishes an SSL/TLS connection as an SSL/TLS Server, using the specified
+  * context / settings object.
+diff --git a/lib/facil/tls/fio_tls_openssl.c b/lib/facil/tls/fio_tls_openssl.c
+--- a/lib/facil/tls/fio_tls_openssl.c
++++ b/lib/facil/tls/fio_tls_openssl.c
+@@ -17,6 +17,7 @@ Feel free to copy, use and enjoy according to the license provided.
+ #if HAVE_OPENSSL
+ #include <openssl/bio.h>
+ #include <openssl/err.h>
++#include <openssl/pem.h>
+ #include <openssl/ssl.h>
+ #include <openssl/x509.h>
+ 
+@@ -1377,6 +1378,36 @@ int fio_tls_on_context(fio_tls_s *tls,
+ /** Returns the default `SSL_CTX`. A rebuild replaces it. */
+ void *fio_tls_ctx(fio_tls_s *tls) { return tls ? tls->ctx : NULL; }
+ 
++char *fio_tls_peer_cert_pem(intptr_t uuid, size_t *len) {
++  *len = 0;
++  fio_tls_connection_s *c = fio_rw_hook_udata(uuid, &FIO_TLS_HOOKS);
++  if (!c)
++    return NULL;
++  fio_lock(&c->lock);
++#if OPENSSL_VERSION_NUMBER >= 0x30000000L
++  X509 *x = SSL_get1_peer_certificate(c->ssl);
++#else
++  X509 *x = SSL_get_peer_certificate(c->ssl);
++#endif
++  fio_unlock(&c->lock);
++  if (!x)
++    return NULL;
++  char *out = NULL;
++  BIO *b = BIO_new(BIO_s_mem());
++  if (b && PEM_write_bio_X509(b, x)) {
++    char *data = NULL;
++    long n = BIO_get_mem_data(b, &data);
++    if (n > 0 && (out = malloc((size_t)n + 1))) {
++      memcpy(out, data, (size_t)n);
++      out[n] = 0;
++      *len = (size_t)n;
++    }
++  }
++  BIO_free(b);
++  X509_free(x);
++  return out;
++}
++
+ /**
+  * Adds an ALPN protocol callback to the SSL/TLS context.
+  *

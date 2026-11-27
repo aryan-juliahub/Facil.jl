@@ -19,6 +19,19 @@ static int is_head(http_s *h) {
   return m.len == 4 && !strncasecmp(m.data, "head", 4);
 }
 
+/* Streamed heads skip http_finish, which adds `date` to other responses. */
+static void date_if_missing(http_s *h) {
+  static uint64_t date_hash = 0;
+  if (!date_hash)
+    date_hash = fiobj_hash_string("date", 4);
+  if (fiobj_hash_get2(h->private_data.out_headers, date_hash))
+    return;
+  FIOBJ d = fiobj_str_buf(32);
+  fiobj_str_resize(d, http_time2str(fiobj_obj2cstr(d).data,
+                                    fio_last_tick().tv_sec));
+  http_set_header(h, HTTP_HEADER_DATE, d);
+}
+
 intptr_t fjl_stream_begin(http_s *h, int status, int *info) {
   *info = 0;
   if (!h || HTTP_INVALID_HANDLE(h))
@@ -29,6 +42,7 @@ intptr_t fjl_stream_begin(http_s *h, int status, int *info) {
   if (is_head(h))
     flags |= FJL_STREAM_HEAD;
   h->status = (uintptr_t)status;
+  date_if_missing(h);
   if (is_http11(h)) {
     flags |= FJL_STREAM_CHUNKED;
     http_set_header2(
@@ -181,6 +195,7 @@ http_sse_s *fjl_sse_upgrade(http_s *h, void *udata, void (*on_close)(void *),
   c->udata = udata;
   c->on_close = on_close;
   *tls = http_settings(h)->tls != NULL;
+  date_if_missing(h);
   /* on_open runs inside the call; c may be freed (by on_close) before it
    * returns, so only the local is read afterwards. */
   if (http_upgrade2sse(h, .on_open = sse_open, .on_close = sse_close,

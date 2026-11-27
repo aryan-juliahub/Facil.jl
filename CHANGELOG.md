@@ -61,6 +61,23 @@ First version. Nothing has been released or registered yet.
   `set_cookie!` with `Path`, `Domain`, `Max-Age`, `Expires`, `Secure`,
   `HttpOnly`, `SameSite`, `Partitioned`, and `delete_cookie!`. Invalid names,
   values and attribute combinations throw an `ArgumentError`.
+- The client of a request: `client_address(req)` gives `(ip, port)` (IPv4 and
+  IPv6, HTTP and HTTPS, captured when the request arrives) and
+  `client_certificate(req)` the PEM certificate of a mutual-TLS client. A
+  task handler can learn that its client left: `isconnected(req)` and
+  `on_disconnect(f, req)`, within about half a second; a half-close is told
+  apart from a close with one `100 Continue` interim response (HTTP/1.1).
+  facil.io patch 23 records the peer port and exposes the TLS peer
+  certificate; the shim ABI is now 3.
+- Streamed responses and event streams carry a `date` header, like the others.
+- Static files: `static_cache_control` sets (or with `nothing` drops) the
+  `cache-control` of `public_folder` files; `If-Modified-Since` is honoured
+  (`If-None-Match` wins when both are sent); a directory asked for without
+  its trailing slash gets a `301` to the path with the slash when it has an
+  `index.html`, query kept (facil.io patch 24).
+- Behaviour change: `public_folder` no longer serves dotfiles by default
+  (`dotfiles = :deny` is the default; `.well-known` is still served). Pass
+  `dotfiles = :serve` for the earlier behaviour.
 
 - Fixes and behaviour changes after the first documentation pass:
   - Every status from 100 to 999 is sent with its own number. Before, `418`,

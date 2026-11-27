@@ -132,7 +132,8 @@ response is sent, not when `sendfile` is called.
 # What the client gets
 - `content-type` from the extension (see [`Facil.mime_type`](@ref)),
   `content-length`, `etag`, `last-modified` and `accept-ranges: bytes`.
-- `304 Not Modified` for a matching `If-None-Match`.
+- `304 Not Modified` for a matching `If-None-Match`, or, without one, an
+  `If-Modified-Since` date the file is not newer than.
 - `206 Partial Content` for a single-range `Range` request (honouring
   `If-Range`), `416` for a range outside the file.
 - The head only, for `HEAD`. An `allow` header for `OPTIONS`.
@@ -194,6 +195,18 @@ end
 
 const PUBLIC_DENY_DOTFILES = 0x01
 const PUBLIC_CONTAIN_SYMLINKS = 0x02
+const PUBLIC_NO_CACHE_CONTROL = 0x04
+const DEFAULT_CACHE_CONTROL = "max-age=3600"
+
+# The cache-control value for public_folder files: a String, or nothing for none.
+function static_cache_control(v)
+    v === nothing && return nothing
+    v isa AbstractString || throw(ArgumentError("static_cache_control must be a string or nothing, got $(repr(v))"))
+    c = String(v)
+    (isempty(c) || any(ch -> ch in ('\0', '\r', '\n'), c)) &&
+        throw(ArgumentError("static_cache_control must be a non-empty header value without NUL or line breaks"))
+    c
+end
 
 static_folder(::Nothing, ::Symbol) = nothing
 function static_folder(dir::AbstractString, symlinks::Symbol)
@@ -205,10 +218,18 @@ function static_folder(dir::AbstractString, symlinks::Symbol)
     length(d) > 1 ? String(rstrip(d, '/')) : d
 end
 
-function static_flags(dir, dotfiles::Symbol, symlinks::Symbol)
+const STATIC_KEYWORDS = (:dotfiles, :symlinks, :static_cache_control)
+
+function check_static_keywords(dir, kw)
+    dir === nothing || return nothing
+    for k in STATIC_KEYWORDS
+        haskey(kw, k) && throw(ArgumentError("$k applies to public_folder, which is not set"))
+    end
+    nothing
+end
+
+function static_flags(dotfiles::Symbol, symlinks::Symbol)
     dotfiles in (:serve, :deny) || throw(ArgumentError("dotfiles must be :serve or :deny, got $(repr(dotfiles))"))
     symlinks in (:follow, :inside) || throw(ArgumentError("symlinks must be :follow or :inside, got $(repr(symlinks))"))
-    dir === nothing && (dotfiles, symlinks) != (:serve, :follow) &&
-        throw(ArgumentError("dotfiles and symlinks apply to public_folder, which is not set"))
     (dotfiles === :deny ? PUBLIC_DENY_DOTFILES : 0x00) | (symlinks === :inside ? PUBLIC_CONTAIN_SYMLINKS : 0x00)
 end

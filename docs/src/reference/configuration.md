@@ -47,7 +47,8 @@ See [Limits](limits.md) and [Security](../guide/security.md).
 |:--|:--|:--|:--|
 | `compress` | `Bool` or [`CompressOptions`](@ref) | `false` | Compress responses with zstd, brotli or gzip according to `Accept-Encoding`. `true` is `CompressOptions()`. [Guide](../guide/compression.md) |
 | `public_folder` | `Nothing` or `AbstractString` | `nothing` | A directory served for `GET`, `HEAD` and `OPTIONS` before the handler is called; requests that match no file reach the handler. [Guide](../guide/static.md) |
-| `dotfiles` | `:serve` or `:deny` | `:serve` | `:deny`: `public_folder` does not serve a path with a part that starts with a dot (`.env`, `.git/config`); the request reaches the handler. [Guide](../guide/static.md#What-is-never-served,-and-what-you-can-turn-off) |
+| `dotfiles` | `:serve` or `:deny` | `:deny` | `:deny`: `public_folder` does not serve a path with a part that starts with a dot (`.env`, `.git/config`), except `.well-known`; the request reaches the handler. `:serve` serves them. [Guide](../guide/static.md#What-is-never-served,-and-what-you-can-turn-off) |
+| `static_cache_control` | `AbstractString` or `Nothing` | `"max-age=3600"` | The `cache-control` header of `public_folder` files; `nothing` sends none. [Guide](../guide/static.md#Caching) |
 | `symlinks` | `:follow` or `:inside` | `:follow` | `:inside`: `public_folder` does not serve a file that resolves to a place outside the folder; the request reaches the handler. [Guide](../guide/static.md#What-is-never-served,-and-what-you-can-turn-off) |
 
 ### HTTPS

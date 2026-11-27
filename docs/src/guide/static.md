@@ -41,9 +41,12 @@ called, Facil looks for the request's path under `dir`:
   your own headers do not apply.
 - A path ending in `/` serves `index.html` from that directory (`/` serves
   `dir/index.html`).
+- A directory named without its trailing slash (`/docs`) that has an
+  `index.html` gets a `301` redirect to the path with the slash (`/docs/`),
+  query string kept, as nginx and `serve-static` do. That is what makes
+  relative links inside `docs/index.html` resolve.
 - **Everything else reaches the handler**: other methods, paths with no file,
-  directories without `index.html`, and a directory named without its trailing
-  slash (`/docs` is not redirected to `/docs/`).
+  and directories without `index.html`.
 
 The path is percent-decoded before the lookup (`/release%20notes.txt` finds
 `release notes.txt`) and the query string is ignored. Files are looked up at
@@ -55,10 +58,10 @@ directory Julia was started in; a directory that does not exist throws an
 `ArgumentError` there.
 
 !!! warning "Everything in the folder is public"
-    By default dotfiles are served (`public/.env` answers `/.env`) and
-    symbolic links are followed, also out of the folder. Put only files meant
-    for the world in the folder, and do not point it at a project root or a
-    directory that holds uploads you have not vetted.
+    Dotfiles are not served by default, but symbolic links are followed, also
+    out of the folder. Put only files meant for the world in the folder, and
+    do not point it at a project root or a directory that holds uploads you
+    have not vetted.
 
 ## What is never served, and what you can turn off
 
@@ -66,19 +69,40 @@ directory Julia was started in; a directory that does not exist throws an
 |---|---|
 | contains `..` as a path part, or `//` (also when percent-encoded) | never served from the folder; reaches your handler, with the path as sent |
 | contains an encoded NUL (`%00`) | `400 Bad Request`; the handler is not called |
-| has a part that starts with a dot (`/.env`, `/.git/config`) | served by default; with `dotfiles = :deny` it reaches your handler as if the file did not exist |
+| has a part that starts with a dot (`/.env`, `/.git/config`) | not served by default (`dotfiles = :deny`): it reaches your handler as if the file did not exist. `/.well-known/...` (RFC 8615: ACME challenges, `security.txt`) is served. `dotfiles = :serve` serves every dotfile |
 | names a symbolic link, or goes through one | followed by default; with `symlinks = :inside` a file that resolves to a place outside the folder reaches your handler instead |
 
 ```julia
-serve!(app, 8080; public_folder = "public", dotfiles = :deny, symlinks = :inside)
+serve!(app, 8080; public_folder = "public", symlinks = :inside)
 ```
 
-The defaults are those of nginx, which serves dotfiles and follows links
-(Node's `serve-static` follows links too, but ignores dotfiles). A folder you
-fully control needs neither option. Turn both on when other people or tools
-can put files into the folder. With `symlinks = :inside`, links that stay
+The defaults are those of Node's `serve-static`, which ignores dotfiles and
+follows links; `dotfiles = :serve` serves dotfiles as nginx does. Turn on `symlinks = :inside` when other people or tools can put files into
+the folder. With `symlinks = :inside`, links that stay
 inside the folder still work, and the folder itself may be reached through a
 link.
+
+## Caching
+
+Files from the folder are sent with `cache-control: max-age=3600`: browsers
+may reuse a file for an hour without asking. Choose another policy with the
+`static_cache_control` keyword:
+
+```julia
+# fingerprinted assets (app.3f9a.css) never change under their name
+serve!(app, 8080; public_folder = "dist", static_cache_control = "public, max-age=31536000, immutable")
+
+# always revalidate: a cheap 304 while the file is unchanged
+serve!(app, 8080; public_folder = "public", static_cache_control = "no-cache")
+
+# no cache-control header at all
+serve!(app, 8080; public_folder = "public", static_cache_control = nothing)
+```
+
+Revalidation works with both validators the file sender emits: a request
+with `If-None-Match` (the ETag) or `If-Modified-Since` (the
+`last-modified` date) gets an empty `304 Not Modified` while the file is
+unchanged.
 
 ## Sending one file with `sendfile`
 
@@ -116,9 +140,9 @@ For `public_folder` and `sendfile` alike:
 | `content-type` | from the file extension; `application/octet-stream` when unknown |
 | `etag` | derived from the file's size and modification time |
 | `last-modified` | the file's modification time |
-| `cache-control` | always `max-age=3600` |
+| `cache-control` | `max-age=3600`; for `public_folder` files, the `static_cache_control` keyword |
 | `If-None-Match` | 304 when the ETag matches |
-| `If-Modified-Since` | ignored: the file is sent |
+| `If-Modified-Since` | 304 when the file is not newer than the date; ignored when `If-None-Match` is present (RFC 9110) |
 | `Range` | one range (`bytes=0-99`, `bytes=100-`, `bytes=-50`) gives 206 with `content-range`; an unsatisfiable one gives 416; several ranges give the whole file with 200 |
 | `If-Range` | honoured with an ETag |
 | HEAD | headers only |
@@ -126,11 +150,10 @@ For `public_folder` and `sendfile` alike:
 
 Things to know:
 
-- **Caching cannot be changed.** Every file is sent with
+- **Caching** is set per server for the public folder (see [Caching](#Caching)
+  below). A file from `sendfile` is always sent with
   `cache-control: max-age=3600`, and a `cache-control` you pass to `sendfile`
-  is replaced. Browsers may reuse a file for an hour without asking. Put a
-  version or content hash in file names you change in place (`app.3f9a.css`),
-  or serve such files from a handler as an ordinary `Response`.
+  is replaced.
 - **The ETag is not a content hash.** A file rewritten within the same second
   with the same size keeps its ETag.
 - **Files are not compressed on the fly**, whatever `compress` says. Create

@@ -128,9 +128,10 @@ hello, trusted client
 ```
 
 A refused client sees a failed handshake, not an HTTP status, and your handler
-is not called. The client's certificate (subject, fingerprint) is not available
-to the handler, so you can admit a set of clients by CA but not tell them
-apart.
+is not called. To tell admitted clients apart, [`client_certificate`](@ref)`(req)`
+is the certificate the client presented, as PEM text (`nothing` for a client
+without one); parse it with an X.509 package for the subject or compute its
+fingerprint.
 
 ## Replace a certificate without restarting
 

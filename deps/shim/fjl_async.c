@@ -6,7 +6,10 @@
 #include <http_internal.h>
 
 #include <errno.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <pthread.h>
+#include <sys/socket.h>
 #include <stdatomic.h>
 #include <sys/time.h>
 #include <time.h>
@@ -24,6 +27,10 @@ struct fjl_async_s {
   atomic_int mem;
   atomic_int gone;
   int shard;
+  atomic_int watch;  /* 0 no, 1 yes, 2 with on_gone */
+  atomic_int client; /* FJL_CLIENT_*, or 1 once the probe went out */
+  atomic_int probe;
+  atomic_int notified;
 };
 
 #define FJL_SHARDS 16
@@ -40,11 +47,15 @@ static atomic_int touching;
 static size_t touch_ms = 1000;
 static void (*resume_cb)(http_s *, uint64_t);
 static void (*drop_cb)(uint64_t);
+static void (*gone_cb)(uint64_t);
+static atomic_size_t nwatched;
+static atomic_int watching;
 
 void fjl_async_init(void (*on_resume)(http_s *, uint64_t),
-                    void (*on_drop)(uint64_t)) {
+                    void (*on_drop)(uint64_t), void (*on_gone)(uint64_t)) {
   resume_cb = on_resume;
   drop_cb = on_drop;
+  gone_cb = on_gone;
   if (atomic_load(&shards_ready))
     return;
   for (int i = 0; i < FJL_SHARDS; i++) {
@@ -74,6 +85,8 @@ static void unlink_out(fjl_async_s *a) {
   a->prev->next = a->next;
   a->next->prev = a->prev;
   fio_unlock(&s->lock);
+  if (atomic_load(&a->watch))
+    atomic_fetch_sub(&nwatched, 1);
   atomic_fetch_sub_explicit(&inflight, 1, memory_order_relaxed);
 }
 
@@ -185,6 +198,10 @@ fjl_async_s *fjl_async_pause(http_s *h, uint64_t id) {
   atomic_store(&a->refs, 2);
   atomic_store(&a->mem, 2);
   atomic_store(&a->gone, 0);
+  atomic_store(&a->watch, 0);
+  atomic_store(&a->client, FJL_CLIENT_OPEN);
+  atomic_store(&a->probe, 0);
+  atomic_store(&a->notified, 0);
   link_in(a);
   fio_uuid_link(a->uuid, a, conn_gone);
   if (!atomic_exchange(&touching, 1))
@@ -195,6 +212,144 @@ fjl_async_s *fjl_async_pause(http_s *h, uint64_t id) {
 }
 
 int fjl_async_done(fjl_async_s *a) { return a ? release(a) : -1; }
+
+/* ---- client watch ---- */
+
+/* 0 established, 1 the peer finished sending (FIN), 2 reset or closed. */
+static int peer_state(int fd) {
+#if defined(__APPLE__) && defined(TCP_CONNECTION_INFO)
+  struct tcp_connection_info ti;
+  socklen_t len = sizeof(ti);
+  if (getsockopt(fd, IPPROTO_TCP, TCP_CONNECTION_INFO, &ti, &len))
+    return errno == EBADF || errno == EINVAL ? 2 : 0;
+  switch (ti.tcpi_state) {
+  case 5: /* TCPS_CLOSE_WAIT */
+    return 1;
+  case 0: /* TCPS_CLOSED */
+    return 2;
+  default:
+    return 0;
+  }
+#elif defined(__linux__) && defined(TCP_INFO)
+  struct tcp_info ti;
+  socklen_t len = sizeof(ti);
+  if (getsockopt(fd, IPPROTO_TCP, TCP_INFO, &ti, &len))
+    return errno == EBADF || errno == EINVAL ? 2 : 0;
+  switch (ti.tcpi_state) {
+  case TCP_CLOSE_WAIT:
+    return 1;
+  case TCP_CLOSE:
+    return 2;
+  default:
+    return 0;
+  }
+#else
+  (void)fd;
+  return 0;
+#endif
+}
+
+static const char probe_msg[] = "HTTP/1.1 100 Continue\r\n\r\n";
+
+/* Returns 1 when `a` just turned gone and on_gone should run for it. */
+static int watch_one(fjl_async_s *a) {
+  if (atomic_load(&a->client) != FJL_CLIENT_GONE) {
+    int st = atomic_load(&a->gone) ? 2 : peer_state(fio_uuid2fd(a->uuid));
+    if (st == 2) {
+      atomic_store(&a->client, FJL_CLIENT_GONE);
+    } else if (st == 1 && atomic_load(&a->probe) &&
+               atomic_load(&a->client) == FJL_CLIENT_OPEN) {
+      atomic_store(&a->client, 1);
+      fio_write(a->uuid, probe_msg, sizeof(probe_msg) - 1);
+    }
+  }
+  return atomic_load(&a->client) == FJL_CLIENT_GONE &&
+         atomic_load(&a->watch) == 2 && !atomic_exchange(&a->notified, 1);
+}
+
+static void watch_tick(void *ignr) {
+  for (int i = 0; i < FJL_SHARDS; i++) {
+    shard_s *s = shards + i;
+    uint64_t ids[64];
+    int n = 0, more = 1;
+    while (more) {
+      more = 0;
+      fio_lock(&s->lock);
+      for (fjl_async_s *a = s->head.next; a != &s->head; a = a->next) {
+        if (!atomic_load(&a->watch) || !watch_one(a))
+          continue;
+        if (n == 64) {
+          atomic_store(&a->notified, 0);
+          more = 1;
+          break;
+        }
+        ids[n++] = a->id;
+      }
+      fio_unlock(&s->lock);
+      for (int k = 0; k < n; k++)
+        if (gone_cb)
+          gone_cb(ids[k]);
+      n = 0;
+    }
+  }
+  (void)ignr;
+}
+
+static void watch_finish(void *ignr);
+static void watch_arm(void) {
+  fio_run_every(FJL_WATCH_MS, 1, watch_tick, NULL, watch_finish);
+}
+static void watch_finish(void *ignr) {
+  if (atomic_load(&nwatched) && fio_is_running()) {
+    watch_arm();
+    return;
+  }
+  atomic_store(&watching, 0);
+  if (atomic_load(&nwatched) && fio_is_running() &&
+      !atomic_exchange(&watching, 1))
+    watch_arm();
+  (void)ignr;
+}
+static void watch_start_task(void *a, void *b, void *c) {
+  watch_arm();
+  (void)a;
+  (void)b;
+  (void)c;
+}
+static void watch_start_cancel(void *a, void *b, void *c) {
+  atomic_store(&watching, 0);
+  (void)a;
+  (void)b;
+  (void)c;
+}
+
+int fjl_async_watch(fjl_async_s *a, int notify, int probe) {
+  if (!a)
+    return FJL_CLIENT_GONE;
+  if (probe)
+    atomic_store(&a->probe, 1);
+  int want = notify ? 2 : 1;
+  int was = atomic_load(&a->watch);
+  while (was < want && !atomic_compare_exchange_weak(&a->watch, &was, want))
+    ;
+  if (!was) {
+    atomic_fetch_add(&nwatched, 1);
+    if (!atomic_exchange(&watching, 1)) {
+      if (fjl_on_reactor())
+        watch_arm();
+      else if (fjl_post(watch_start_task, watch_start_cancel, NULL, NULL, NULL))
+        atomic_store(&watching, 0);
+    }
+  }
+  return fjl_async_client(a);
+}
+
+int fjl_async_client(fjl_async_s *a) {
+  if (!a || atomic_load(&a->gone))
+    return FJL_CLIENT_GONE;
+  return atomic_load(&a->client) == FJL_CLIENT_GONE ? FJL_CLIENT_GONE
+                                                    : FJL_CLIENT_OPEN;
+}
 
 /* Worker hand-off. avail = idle - queued: offers reserve an idle worker by
  * taking from avail, then publish the job in queued. While the offer rate is

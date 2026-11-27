@@ -7,7 +7,7 @@
 #include <stdint.h>
 
 #define FJL_VERSION "0.1.0"
-#define FJL_ABI 2
+#define FJL_ABI 3
 
 #ifndef FJL_BUILD_ID
 #define FJL_BUILD_ID "unknown"
@@ -69,6 +69,8 @@ typedef struct {
   uint8_t ws_timeout;
   uint8_t log;
   uint8_t public_folder_flags; /* HTTP_PUBLIC_* */
+  /* cache-control for public_folder files; NULL keeps facil.io's default */
+  const char *cache_control;
 } fjl_listen_s;
 
 /* Opens a listener on the reactor; call->result is its uuid, or -1 with

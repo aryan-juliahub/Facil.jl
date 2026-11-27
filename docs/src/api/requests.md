@@ -39,6 +39,19 @@ BodyStream
 Facil.BodyAborted
 ```
 
+## The client
+
+Who sent a request, and whether it is still waiting for the answer. The
+[Reading requests guide](../guide/requests.md#Who-sent-the-request) has a
+complete program.
+
+```@docs
+client_address
+client_certificate
+isconnected
+on_disconnect
+```
+
 ## Counters
 
 ```@docs

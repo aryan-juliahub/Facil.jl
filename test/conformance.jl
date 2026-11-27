@@ -171,7 +171,7 @@ end
         handler(req) = Response(200, "handler")
         served(p, t) = (r = get_raw(p, t); (parse(Int, split(status_line(r), ' ')[2]), body_of(r)))
 
-        server = serve!(handler, 0; public_folder = dir)
+        server = serve!(handler, 0; public_folder = dir, dotfiles = :serve)
         try
             p = port(server)
             @test served(p, "/a.txt") == (200, "AAA")
@@ -183,7 +183,7 @@ end
                       "/sub%2f..%2f..%2fetc/passwd", "/sub//b.txt", "/sub/..")
                 @test served(p, t) == (200, "handler") || t
             end
-            # The defaults: dotfiles are served and symbolic links are followed.
+            # dotfiles = :serve serves dotfiles; by default symbolic links are followed.
             @test served(p, "/.env") == (200, "KEY=1")
             @test served(p, "/.git/config") == (200, "cfg")
             @test served(p, "/out.txt") == (200, "outside")

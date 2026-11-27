@@ -1,0 +1,216 @@
+diff --git a/lib/facil/http/http.c b/lib/facil/http/http.c
+--- a/lib/facil/http/http.c
++++ b/lib/facil/http/http.c
+@@ -457,6 +457,112 @@ static int http_etag_listed(FIOBJ header, fio_str_info_s etag) {
+   return 0;
+ }
+ 
++/* A path segment named `.well-known` (RFC 8615), which dotfile denial allows. */
++static inline int http_is_well_known(const char *p, size_t n) {
++  return n >= 11 && !memcmp(p, ".well-known", 11) && (n == 11 || p[11] == '/');
++}
++
++static int http_date_num(const char *p, int n, int *out) {
++  int v = 0;
++  for (int i = 0; i < n; i++) {
++    if (p[i] == ' ' && !i && n == 2)
++      continue;
++    if (p[i] < '0' || p[i] > '9')
++      return -1;
++    v = v * 10 + (p[i] - '0');
++  }
++  *out = v;
++  return 0;
++}
++
++/* Parses an HTTP-date in any of the three forms of RFC 9110 5.6.7. */
++static int http_date_parse(fio_str_info_s v, time_t *out) {
++  static const char months[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
++  const char *p = v.data, *day, *mon, *year, *clock;
++  int year_len;
++  if (!p)
++    return -1;
++  const char *comma = memchr(p, ',', v.len);
++  if (comma) {
++    size_t n = v.len - (size_t)(comma + 1 - p);
++    p = comma + 1;
++    if (n == 25 && p[0] == ' ' && p[3] == ' ' && p[7] == ' ' &&
++        p[12] == ' ' && !memcmp(p + 21, " GMT", 4)) {
++      day = p + 1, mon = p + 4, year = p + 8, year_len = 4, clock = p + 13;
++    } else if (n == 23 && p[0] == ' ' && p[3] == '-' && p[7] == '-' &&
++               p[10] == ' ' && !memcmp(p + 19, " GMT", 4)) {
++      day = p + 1, mon = p + 4, year = p + 8, year_len = 2, clock = p + 11;
++    } else {
++      return -1;
++    }
++  } else if (v.len == 24 && p[3] == ' ' && p[7] == ' ' && p[10] == ' ' &&
++             p[19] == ' ') {
++    mon = p + 4, day = p + 8, clock = p + 11, year = p + 20, year_len = 4;
++  } else {
++    return -1;
++  }
++  int d, y, hh, mm, ss, m = -1;
++  for (int i = 0; i < 12; i++)
++    if (!memcmp(months + 3 * i, mon, 3))
++      m = i + 1;
++  if (m < 0 || http_date_num(day, 2, &d) ||
++      http_date_num(year, year_len, &y) || clock[2] != ':' ||
++      clock[5] != ':' || http_date_num(clock, 2, &hh) ||
++      http_date_num(clock + 3, 2, &mm) || http_date_num(clock + 6, 2, &ss))
++    return -1;
++  if (year_len == 2)
++    y += y < 70 ? 2000 : 1900;
++  if (d < 1 || d > 31 || hh > 23 || mm > 59 || ss > 60)
++    return -1;
++  /* days since 1970-01-01 of a proleptic Gregorian date */
++  const int yy = y - (m <= 2);
++  const int era = (yy >= 0 ? yy : yy - 399) / 400;
++  const int yoe = yy - era * 400;
++  const int doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
++  const int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
++  const int64_t days = (int64_t)era * 146097 + doe - 719468;
++  *out = (time_t)(days * 86400 + hh * 3600 + mm * 60 + ss);
++  return 0;
++}
++
++/* Answers 301 with the path plus a slash for a public-folder directory that
++ * has an index file; -1 (nothing sent) otherwise. */
++static int http_dir_redirect(http_s *h, FIOBJ filename, const char *prefix,
++                             size_t prefix_len, uint8_t flags,
++                             const char *encoded, size_t encoded_len) {
++  if (encoded_len < 2 || encoded[0] != '/' || encoded[1] == '/' ||
++      encoded[1] == '\\')
++    return -1;
++  fiobj_str_write(filename, "/index.html", 11);
++  fio_str_info_s s = fiobj_obj2cstr(filename);
++  struct stat st;
++  if (stat(s.data, &st) || !S_ISREG(st.st_mode))
++    return -1;
++  if (flags & HTTP_PUBLIC_CONTAIN_SYMLINKS) {
++    char real[PATH_MAX];
++    if (!realpath(s.data, real) || strncmp(real, prefix, prefix_len) ||
++        real[prefix_len] != '/')
++      return -1;
++  }
++  FIOBJ loc = fiobj_str_buf(encoded_len + 2);
++  fiobj_str_write(loc, encoded, encoded_len);
++  fiobj_str_write(loc, "/", 1);
++  if (h->query) {
++    fio_str_info_s q = fiobj_obj2cstr(h->query);
++    if (q.len) {
++      fiobj_str_write(loc, "?", 1);
++      fiobj_str_write(loc, q.data, q.len);
++    }
++  }
++  fio_str_info_s l = fiobj_obj2cstr(loc);
++  http_set_header2(h, (fio_str_info_s){.data = (char *)"location", .len = 8},
++                   l);
++  fiobj_free(loc);
++  h->status = 301;
++  http_finish(h);
++  return 0;
++}
++
+ static inline int http_test_encoded_path(const char *mem, size_t len) {
+   const char *pos = NULL;
+   const char *end = mem + len;
+@@ -498,10 +604,9 @@ static int http_sendfile2_any(http_s *h, const char *prefix, size_t prefix_len,
+   }
+   struct stat file_data = {.st_size = 0};
+   const http_settings_s *settings = http2protocol(h)->settings;
++  const int is_public = prefix && settings && prefix == settings->public_folder;
+   const uint8_t public_flags =
+-      (prefix && settings && prefix == settings->public_folder)
+-          ? (uint8_t)settings->public_folder_flags
+-          : 0;
++      is_public ? (uint8_t)settings->public_folder_flags : 0;
+   static uint64_t accept_enc_hash = 0;
+   if (!accept_enc_hash)
+     accept_enc_hash = fiobj_hash_string("accept-encoding", 15);
+@@ -544,7 +649,8 @@ static int http_sendfile2_any(http_s *h, const char *prefix, size_t prefix_len,
+         return -1;
+       if (!error_page && (public_flags & HTTP_PUBLIC_DENY_DOTFILES)) {
+         for (size_t i = prefix_len; i + 1 < tmp.len; i++)
+-          if (tmp.data[i] == '/' && tmp.data[i + 1] == '.')
++          if (tmp.data[i] == '/' && tmp.data[i + 1] == '.' &&
++              !http_is_well_known(tmp.data + i + 1, tmp.len - i - 1))
+             return -1;
+       }
+     }
+@@ -577,9 +683,15 @@ static int http_sendfile2_any(http_s *h, const char *prefix, size_t prefix_len,
+     }
+   }
+ no_gzip_support:
+-  if (stat(s.data, &file_data) ||
+-      !(S_ISREG(file_data.st_mode) || S_ISLNK(file_data.st_mode)))
++  if (stat(s.data, &file_data))
+     return -1;
++  if (!(S_ISREG(file_data.st_mode) || S_ISLNK(file_data.st_mode))) {
++    if (S_ISDIR(file_data.st_mode) && is_public && !error_page && encoded &&
++        (method == 1 || method == 2))
++      return http_dir_redirect(h, filename, prefix, prefix_len, public_flags,
++                               encoded, encoded_len);
++    return -1;
++  }
+ found_file:
+   if (public_flags & HTTP_PUBLIC_CONTAIN_SYMLINKS) {
+     char real[PATH_MAX];
+@@ -595,7 +707,11 @@ found_file:
+     http_set_header(h, HTTP_HEADER_LAST_MODIFIED, tmp);
+   }
+   /* set cache-control */
+-  http_set_header(h, HTTP_HEADER_CACHE_CONTROL, fiobj_dup(HTTP_HVALUE_MAX_AGE));
++  if (!(public_flags & HTTP_PUBLIC_NO_CACHE_CONTROL))
++    http_set_header(h, HTTP_HEADER_CACHE_CONTROL,
++                    fiobj_dup((is_public && settings->public_cache_control)
++                                  ? (FIOBJ)settings->public_cache_control
++                                  : HTTP_HVALUE_MAX_AGE));
+   /* set & test etag */
+   uint64_t etag = (uint64_t)file_data.st_size;
+   etag ^= (uint64_t)file_data.st_mtime;
+@@ -617,8 +733,18 @@ found_file:
+     static uint64_t none_match_hash = 0;
+     if (!none_match_hash)
+       none_match_hash = fiobj_hash_string("if-none-match", 13);
+-    if (http_etag_listed(fiobj_hash_get2(h->headers, none_match_hash),
+-                         fiobj_obj2cstr(etag_str))) {
++    static uint64_t modified_since_hash = 0;
++    if (!modified_since_hash)
++      modified_since_hash = fiobj_hash_string("if-modified-since", 17);
++    FIOBJ none_match = fiobj_hash_get2(h->headers, none_match_hash);
++    FIOBJ since = none_match ? FIOBJ_INVALID
++                             : fiobj_hash_get2(h->headers, modified_since_hash);
++    time_t since_t;
++    /* If-None-Match decides alone when present (RFC 9110 13.2.2) */
++    if (http_etag_listed(none_match, fiobj_obj2cstr(etag_str)) ||
++        (since && method != 3 && !FIOBJ_TYPE_IS(since, FIOBJ_T_ARRAY) &&
++         !http_date_parse(fiobj_obj2cstr(since), &since_t) &&
++         file_data.st_mtime <= since_t)) {
+       h->status = 304;
+       http_finish(h);
+       return 0;
+diff --git a/lib/facil/http/http.h b/lib/facil/http/http.h
+--- a/lib/facil/http/http.h
++++ b/lib/facil/http/http.h
+@@ -385,8 +385,10 @@ struct http_settings_s {
+   /** `HTTP_PUBLIC_*` flags for files served from the public folder (this
+    * was `reserved1`, so the layout is unchanged). */
+   intptr_t public_folder_flags;
+-  /** reserved for future use. */
+-  intptr_t reserved2;
++  /** `cache-control` value for files from the public folder: a String
++   * FIOBJ the owner of the settings keeps alive, or 0 for `max-age=3600`
++   * (this was `reserved2`, so the layout is unchanged). */
++  uintptr_t public_cache_control;
+   /** reserved for future use. */
+   intptr_t reserved3;
+   /**
+@@ -848,6 +850,8 @@ fio_str_info_s http_status2str(uintptr_t status);
+ /** Files that resolve outside the public folder are not served. The folder
+  * must be given as its own real path. */
+ #define HTTP_PUBLIC_CONTAIN_SYMLINKS 2
++/** Files from the public folder are sent without `cache-control`. */
++#define HTTP_PUBLIC_NO_CACHE_CONTROL 4
+ /** Sets the reason phrase sent for a status in 100..999. Call before the
+  * first connection; the phrase is copied. */
+ void http_status_reason_set(uintptr_t status, const char *reason, size_t len);

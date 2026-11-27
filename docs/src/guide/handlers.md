@@ -233,12 +233,14 @@ collections are invisible; long ones are the slowest requests you will see.
 
 ## A client that goes away
 
-Facil does not notice a client that disconnects while its handler is running.
-The handler runs to the end and its result is discarded. There is no
-cancellation. If a handler is expensive and clients are impatient, check a
-deadline of your own inside it. Streamed responses are different:
-[`ResponseStream`](@ref) reports a gone client through `isopen` and by
-throwing from `write`.
+A handler is not interrupted when its client disconnects: it runs to the end
+and its result is discarded. A task handler can watch for it and stop early:
+[`isconnected`](@ref)`(req)` turns `false` within about half a second of the
+client closing its connection, and [`on_disconnect`](@ref)`(f, req)` runs `f`
+on a task of its own when that happens. Inline handlers cannot: the reactor
+that runs them is not watching the connection meanwhile. Streamed responses
+are different again: [`ResponseStream`](@ref) reports a gone client through
+`isopen` and by throwing from `write`.
 
 A client may also finish sending and keep listening: it writes its request and
 shuts down its side of the connection, as `nc`, some health checkers and some
