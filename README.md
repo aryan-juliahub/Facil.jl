@@ -152,49 +152,66 @@ Facil against Node.js v22.23.2 on a 100-row scoreboard, each row against the
 fastest Node option for that job (`node:http`, `node:https`, `cluster` for
 several cores, uWebSockets.js or `ws` for WebSockets). Apple M5 Pro (15 cores,
 macOS), Julia 1.13.0, client and server on one machine over loopback, 3 runs per
-cell on a machine checked idle before each run. Measured 25 November 2026.
+cell on a machine checked idle before each run, Facil servers with
+`JULIA_NUM_GC_THREADS=4`. Measured 26 November 2026.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/src/assets/bench-throughput-dark.svg">
-  <img alt="Dumbbell chart of requests per second for Facil.jl and Node.js on 23 scoreboard rows. Facil is ahead on 20, from 1.01× to 2.10×; behind on building a 1 KB JSON response (0.53×, approved exception), 256 KB WebSocket echo with 10 connections (0.93×, approved exception) and WebSocket broadcast (0.97×)." src="docs/src/assets/bench-throughput-light.svg" width="830">
+  <img alt="Dumbbell chart of requests per second for Facil.jl and Node.js on 23 scoreboard rows. Facil is ahead on 20, from 1.01× to 1.77×; behind on building a 1 KB JSON response (0.53×, approved exception), 256 KB WebSocket echo with 10 connections (0.98×, approved exception) and with 100 connections (0.997×)." src="docs/src/assets/bench-throughput-light.svg" width="830">
 </picture>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/src/assets/bench-ratio-dark.svg">
-  <img alt="Facil ÷ Node ratio for all 100 scoreboard rows, sorted, log scale: 76 rows at or above 1.0×, 5 failing rows all within 4% of Node, and 19 approved exceptions, the lowest being start-up (0.036×) and first request (0.0065×)." src="docs/src/assets/bench-ratio-light.svg" width="830">
+  <img alt="Facil ÷ Node ratio for all 100 scoreboard rows, sorted, log scale: 72 rows at or above 1.0×, 9 failing rows (5 within 5% of Node, the worst 0.59×), and 19 approved exceptions, the lowest being start-up (0.033×) and first request (0.0068×)." src="docs/src/assets/bench-ratio-light.svg" width="830">
 </picture>
 
-**76 pass, 5 fail, 19 approved exceptions.** The five failing rows (A7, A14,
-7-c1000, 23b, 29) are each within 4% of Node. The exceptions are Julia start-up,
-memory and first-request compile time, JSON building, GC tail latency, task
-hand-offs at light load and two macOS WebSocket rows; see Known limits below.
+**72 pass, 9 fail, 19 approved exceptions.** Five failing rows are within 5% of
+Node (A7, A15c, A19d, 7-c100, 23a). Four are not: 7-c1000 (256 KB WebSocket
+echo, 1,000 connections, 0.93×) and three latency tails at a light, fixed load
+(21b-p99 0.71×, 21c 0.59×, 22 0.87×), where Julia's GC pauses show. The
+exceptions are Julia start-up, memory and first-request compile time, JSON
+building, GC tail latency, task hand-offs and two macOS WebSocket rows; see
+Known limits below.
 
 | Row | Facil | Node | Ratio | Verdict |
 |---|---|---|---|---|
-| A1 Tiny reply, 1 core | 232,517 | 170,961 | 1.36× | PASS |
-| A2 150-byte JSON, 1 core | 237,781 | 161,129 | 1.48× | PASS |
-| A3 POST echo | 218,288 | 139,026 | 1.57× | PASS |
-| A4 100 KB response | 111,611 | 87,291 | 1.28× | PASS |
-| A20c Pipelining, depth 16 | 373,962 | 245,715 | 1.52× | PASS |
-| A16 Keep-alive, 1,000 connections | 222,037 | 141,560 | 1.57× | PASS |
-| 2 Tiny JSON, 4 cores (Node `cluster`) | 185,948 | 179,037 | 1.04× | PASS |
-| A27 HTTPS JSON, keep-alive | 156,251 | 130,859 | 1.19× | PASS |
-| A12b Upload 64 KB | 112,278 | 72,584 | 1.55× | PASS |
-| 27 Streamed gzip, 100 KB JSON | 10,523 | 6,297 | 1.67× | PASS |
-| 17a Handler waits 1 ms (`Facil.sleep`), 100 connections | 90,131 | 60,409 | 1.49× | PASS |
-| A29 WebSocket echo 64 B, 100 connections (msgs/s, vs uWebSockets.js) | 282,130 | 279,283 | 1.01× | PASS |
-| A14 WebSocket broadcast, 1,000 subscribers × 1,000 Hz (deliveries/s, vs uWebSockets.js) | 968,013 | 999,971 | 0.97× | FAIL |
-| 19a Build a 1 KB JSON response | 69,271 | 131,376 | 0.53× | EXCEPTION |
-| 12 Start-up to first response (ms, lower is better) | 764 | 27.4 | 0.036× | EXCEPTION |
-| 10 Memory, idle (MB, lower is better) | 384 | 50.7 | 0.13× | EXCEPTION |
+| A1 Tiny reply, 1 core | 248,626 | 179,610 | 1.38× | PASS |
+| A2 150-byte JSON, 1 core | 231,505 | 158,620 | 1.46× | PASS |
+| A3 POST echo | 214,696 | 136,737 | 1.57× | PASS |
+| A4 100 KB response | 108,805 | 85,383 | 1.27× | PASS |
+| A20c Pipelining, depth 16 | 374,122 | 241,882 | 1.55× | PASS |
+| A16 Keep-alive, 1,000 connections | 212,510 | 135,408 | 1.57× | PASS |
+| 2 Tiny JSON, 4 cores (Node `cluster`) | 186,603 | 179,389 | 1.04× | PASS |
+| A27 HTTPS JSON, keep-alive | 156,651 | 128,953 | 1.21× | PASS |
+| A12b Upload 64 KB | 98,315 | 67,957 | 1.45× | PASS |
+| 27 Streamed gzip, 100 KB JSON | 11,257 | 6,348 | 1.77× | PASS |
+| 17a Handler waits 1 ms (`Facil.sleep`), 100 connections | 85,941 | 55,382 | 1.55× | PASS |
+| A29 WebSocket echo 64 B, 100 connections (msgs/s, vs uWebSockets.js) | 281,369 | 276,838 | 1.02× | PASS |
+| A19d 100 request headers | 31,167 | 31,900 | 0.98× | FAIL |
+| 21c p99.9 at 10k req/s, 10 KB garbage per request (ms, lower is better) | 0.274 | 0.161 | 0.59× | FAIL |
+| 19a Build a 1 KB JSON response | 67,053 | 127,284 | 0.53× | EXCEPTION |
+| 25 1 MB upload streamed through a task (requests per CPU-second) | 2,431 | 11,585 | 0.21× | EXCEPTION |
+| 12 Start-up to first response (ms, lower is better) | 881 | 29.3 | 0.033× | EXCEPTION |
+| 10 Memory, idle (MB, lower is better) | 387 | 51.0 | 0.13× | EXCEPTION |
 
 Requests per second (median of 3 runs) unless noted. Numbers come from the full
-run of 25 November 2026, with later verification runs replacing rows they
-re-measured: rows 19–22 and 32 with `JULIA_NUM_GC_THREADS=4`, and the rows re-run
-after the task-pool and WebSocket fixes (A1, A11, A15c, A17, A26, 1–4, 6a–6c, 7*, 8,
-17a–18b, 20, 25–27, 31). All 100 rows with min–max ranges are in
+run of 26 November 2026, with a rerun (both sides, 3 runs) replacing every row
+whose verdict differed from the previous published numbers, plus A17, 25, 32
+and the start-up rows. Row 25 fell from 0.74× to 0.21× since 25 November: the
+server now spends about 3.5 times the CPU per upload; the cause is not yet
+traced.
+
+On Apple silicon Julia 1.12 and 1.13 can crash in GC marking with more than one
+GC thread, so the [deployment guide](docs/src/guide/deployment.md) recommends
+`JULIA_NUM_GC_THREADS=1` there. With one GC thread throughput barely changes
+(21b 184,515 against 195,114 req/s) but allocation-heavy tails grow: 21a p99
+2.15 ms against 0.23 ms, the longest pause (32) 11.6 ms against 2.6 ms. No
+verdict changes.
+
+All 100 rows with min–max ranges are in
 [bench/scoreboard/chart_data.csv](bench/scoreboard/chart_data.csv) and
-[bench/scoreboard/RESULTS.md](bench/scoreboard/RESULTS.md); method and caveats in
+[bench/scoreboard/RESULTS.md](bench/scoreboard/RESULTS.md) (with what changed
+since 25 November and the one-GC-thread table); method and caveats in
 [docs/src/reference/benchmarks.md](docs/src/reference/benchmarks.md). The charts are drawn by
 `python3 bench/scoreboard/chart.py`.
 

@@ -134,8 +134,8 @@ exceptions (2026-11-25):
 
 | Rows | What | Why |
 |:--|:--|:--|
-| 10, 10-sysimg, 11 | Memory, idle and with 10,000 connections | The Julia runtime: about 380 MB idle against Node's 50 MB |
-| 12, 12-sysimg, 12-json, 13, 13-sysimg, 13-json | Start-up and first request | Julia start-up and compilation: 0.76 s to first response, 0.32 s for a first request |
+| 10, 10-sysimg, 11 | Memory, idle and with 10,000 connections | The Julia runtime: about 390 MB idle against Node's 50 MB |
+| 12, 12-sysimg, 12-json, 13, 13-sysimg, 13-json | Start-up and first request | Julia start-up and compilation: 0.88 s to first response, 0.31 s for a first request |
 | 19, 19a | Building a 50 KB or 1 KB JSON response | The JSON library's serialisation, not the server |
 | 25 | 1 MB upload streamed through a task | A thread crossing per chunk; `Stream(on_chunk)` avoids it |
 | 31-p99, 31-cpu | Task handler at a light 10,000 req/s | Two thread crossings per request; `inline = true` avoids them |
@@ -143,6 +143,7 @@ exceptions (2026-11-25):
 | 26 | WebSocket broadcast to 10,000 subscribers | macOS socket memory; to be rechecked on Linux |
 | 21a-p99, 21a-p999, 32 | Tail latency and longest pause at 10,000 req/s | Julia GC pauses |
 
-Five more rows are within 4% of Node and count as failing; they are listed on
-the [benchmarks](benchmarks.md#Failing-rows) page. All numbers were measured
+Nine more rows fail: five within 5% of Node, 256 KB WebSocket echo with 1,000
+connections (0.93×), and three latency tails at a light or allocation-heavy load
+(0.59× to 0.87×). They are listed on the [benchmarks](benchmarks.md#Failing-rows) page. All numbers were measured
 on macOS; the scoreboard has not been run on Linux.

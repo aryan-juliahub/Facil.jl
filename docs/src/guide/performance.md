@@ -116,16 +116,19 @@ What to expect, with four collector threads, one reactor, inline handlers and
 
 | Load | Facil | Row |
 |:--|:--|:--|
-| 10,000 req/s, no garbage: p99.9 | 0.25 ms (0.27) | 22 |
-| 10,000 req/s, no garbage: longest single pause | 4.7 ms (4.0) | 32 |
-| 10,000 req/s, 10 KB garbage per request: p99.9 | 0.32 ms (0.35) | 21c |
-| 10,000 req/s, 100 KB garbage per request: p99 / p99.9 | 0.22 / 2.9 ms (0.14 / 0.16) | 21a |
-| 100 KB garbage per request, maximum rate | 195,378 req/s, p99 1.2 ms (133,111, 1.3) | 21b |
+| 10,000 req/s, no garbage: p99.9 | 0.19 ms (0.17) | 22 |
+| 10,000 req/s, no garbage: longest single pause | 2.6 ms (0.42) | 32 |
+| 10,000 req/s, 10 KB garbage per request: p99.9 | 0.27 ms (0.16) | 21c |
+| 10,000 req/s, 100 KB garbage per request: p99 / p99.9 | 0.23 / 2.9 ms (0.15 / 0.16) | 21a |
+| 100 KB garbage per request, maximum rate | 195,114 req/s, p99 1.3 ms (133,225, 0.94) | 21b |
 
-Throughput is ahead of Node in every row; the tail under heavy allocation is
-not (rows 21a and 32 are approved exceptions on the scoreboard). If your
-service has a strict p99.9 target and allocates heavily per request, this is
-the limit to know about.
+Throughput is ahead of Node; the tail is not. Rows 21a and 32 are approved
+exceptions on the scoreboard, and 21b-p99, 21c and 22 fail. If your service has
+a strict p99.9 target and allocates heavily per request, this is the limit to
+know about. With one collector thread, as recommended on Apple silicon
+([Deployment](deployment.md)), the tails under allocation are longer: row 21a's
+p99 is 2.2 ms and the longest pause 11.6 ms
+([Benchmarks](@ref bench-gc1)).
 
 ### Heap headroom
 
