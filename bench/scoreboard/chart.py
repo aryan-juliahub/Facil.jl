@@ -20,17 +20,14 @@ REPO = os.path.dirname(os.path.dirname(HERE))
 CSV_PATH = os.path.join(HERE, "chart_data.csv")
 ASSETS = os.path.join(REPO, "docs", "src", "assets")
 
-# Later runs replace earlier ones row by row: the full run, the GC=4 verification,
-# then the verification runs after the task-pool and WebSocket fixes.
+# Later runs replace earlier ones row by row: the full run of 26 Nov 2026, then the
+# rerun of every row whose verdict changed against the previous published numbers.
 SOURCES = [
-    "20261125-094221",
-    "20261125-115157",
-    "20261125-163117",
-    "20261125-164821",
-    "20261125-165520",
-    "20261125-170441",
-    "20261125-171547",
+    "20261126-212620",
+    "20261126-234001",
 ]
+
+DATE = "26 Nov 2026"
 
 # Rows drawn in the throughput chart, in this order, with their short labels.
 HEADLINE = [
@@ -125,6 +122,8 @@ FONT = 'font-family="system-ui, -apple-system, Segoe UI, Helvetica, Arial, sans-
 
 
 def fmt_ratio(r):
+    if 0.995 <= r < 1:
+        return f"{r:.3f}×"
     return f"{r:.2f}×" if r >= 0.1 else f"{r:.2g}×"
 
 
@@ -253,11 +252,12 @@ def ratio_svg(rows, t, date):
                f'fill="{t["ink2"]}">{first_below} rows at or above 1.0×</text>')
     fails = [i for i, r in enumerate(rows) if r["verdict"] == "FAIL"]
     worst = min(float(rows[i]["ratio"]) for i in fails)
+    near = sum(float(rows[i]["ratio"]) >= 0.95 for i in fails)
     fx = x0 + (fails[0] + fails[-1] + 1) / 2 * slot
     out.append(f'<line x1="{fx:.1f}" y1="{base + 8:.1f}" x2="{fx:.1f}" y2="{base + 44:.1f}" '
                f'stroke="{t["ink2"]}" stroke-width="1"/>')
     out.append(f'<text x="{fx - 4:.1f}" y="{base + 58:.1f}" font-size="12" text-anchor="end" fill="{t["ink2"]}">'
-               f'{len(fails)} fails, all within {math.ceil((1 - worst) * 100)}% of Node</text>')
+               f'{len(fails)} fails: {near} within 5% of Node, the worst {fmt_ratio(worst)}</text>')
     out.append(f'<text x="16" y="{H - 30}" font-size="11.5" fill="{t["ink2"]}">Lower-is-better rows '
                '(latency, memory, start-up, CPU) are drawn as Node ÷ Facil, so above the line always favours Facil.</text>')
     out.append(f'<text x="16" y="{H - 13}" font-size="11.5" fill="{t["ink2"]}">Approved exceptions: '
@@ -271,7 +271,7 @@ def render():
     rows = list(csv.DictReader(open(CSV_PATH)))
     by_id = {r["row"]: r for r in rows}
     head = [by_id[rid] for rid, _ in HEADLINE]
-    date = "25 Nov 2026"
+    date = DATE
     os.makedirs(ASSETS, exist_ok=True)
     for mode, t in THEMES.items():
         for name, svg in (("throughput", throughput_svg(head, t, date)), ("ratio", ratio_svg(rows, t, date))):

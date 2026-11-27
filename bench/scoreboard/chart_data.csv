@@ -1,101 +1,101 @@
 row,name,metric,better,facil,facil_min,facil_max,node,node_min,node_max,opponent,ratio,verdict,flags,run,label
-A1,"Tiny reply, 1 core",rps,higher,232517,228547,248560,170961,162924,177054,node:http,1.36,PASS,,20261125-171547,"Tiny reply, 1 core"
-A2,"150-byte JSON, 1 core",rps,higher,237781,237309,238001,161129,160669,162014,node:http,1.476,PASS,,20261125-094221,"150-byte JSON, 1 core"
-A3,POST echo,rps,higher,218288,217806,219315,139026,137560,139558,node:http,1.57,PASS,,20261125-094221,POST echo
-A4,100 KB response,rps,higher,111611,111108,111706,87291,87042,87694,node:http,1.279,PASS,,20261125-094221,100 KB response
-A5,1 MB response,rps,higher,16909,16899,16924,16219,16082,16233,node:http,1.043,PASS,,20261125-094221,
-A6,"CPU-bound handler (FNV 3x16 KB), 1 core",rps,higher,17128,17053,17133,17122,16859,17753,node:http,1,PASS,,20261125-094221,
-A7,"CPU-bound handler, 2 cores",rps,higher,35731,35710,35739,36278,36180,36313,cluster W=2,0.9849,FAIL,,20261125-094221,
-A8,"CPU-bound handler, 4 cores",rps,higher,69330,69296,69355,64236,64223,64244,cluster W=4,1.079,PASS,,20261125-094221,
-A9,"1M requests, 10 per connection (client resets)",rps,higher,188361,187903,189057,149197,147878,149715,node:http,1.262,PASS,,20261125-094221,
-A9-p99,"1M requests, 10 per connection: p99",p99_ms,lower,1.21,1.15,1.21,6.16,6.09,6.16,node:http,5.091,PASS,,20261125-094221,
-A10,"10,000 keep-alive connections: server CPU per request",cpu_us_per_req,lower,6.01,4.74,6.17,8.22,8.18,8.26,node:http,1.368,PASS,facil:errors,20261125-094221,
-A11,"gzip responses (100 KB JSON, level 6, off the event loop)",rps,higher,12169,12149,12288,7662,7534,7674,node:http,1.588,PASS,,20261125-164821,"gzip, 100 KB JSON"
-A12a,"Upload 1 KB, in memory",rps,higher,205291,203947,206127,140637,140146,140989,node:http,1.46,PASS,,20261125-094221,
-A12b,"Upload 64 KB, in memory",rps,higher,112278,111994,112350,72584,72211,72642,node:http,1.547,PASS,,20261125-094221,Upload 64 KB
-A12c,"Upload 1 MB, in memory",rps,higher,11904,11892,12000,9644,9574,9693,node:http,1.234,PASS,,20261125-094221,
-A13a,"TLS handshakes, ECDSA full, 10 clients",rps,higher,7299,7216,7309,6857,6786,6872,node:https,1.064,PASS,,20261125-094221,"TLS handshakes, ECDSA"
-A13b,"TLS handshakes, RSA full, 10 clients",rps,higher,2282,2260,2285,2221,2219,2226,node:https,1.027,PASS,,20261125-094221,
-A13c,"TLS handshakes, RSA resumed, 10 clients",rps,higher,8229,8142,8238,8031,8023,8067,node:https,1.025,PASS,,20261125-094221,
-A14,"WebSocket broadcast, 1,000 subscribers x 1,000 Hz",deliveries_per_s,higher,968013,764709,999976,999971,999796,1e+06,uWebSockets.js,0.968,FAIL,,20261125-094221,"WS broadcast, 1k subs x 1 kHz (uWS)"
-A15a,"Streaming 10 x 1 KB chunks, no delay, 50 conns",rps,higher,168405,168384,169003,92992,92011,93024,node:http,1.811,PASS,facil:client,20261125-094221,
-A15b,"Streaming 100 x 16 KB chunks, no delay",rps,higher,3905,3902,3906,3877,3865,3883,node:http,1.007,PASS,"facil:client, node:client",20261125-094221,
-A15c,"Streaming 10 x 1 MB chunks, no delay",rps,higher,749,748,750,747,719,748,node:http,1.003,PASS,"facil:client, node:client",20261125-171547,
-A16,"Keep-alive, 1,000 connections",rps,higher,222037,219850,225363,141560,140286,142650,node:http,1.569,PASS,,20261125-094221,"Keep-alive, 1,000 connections"
-A17,"Keep-alive, 10,000 connections",rps,higher,234442,79714,289752,111387,109051,120001,node:http,2.105,PASS,facil:errors,20261125-171547,"Keep-alive, 10,000 connections"
-A18,"Keep-alive, 5,000 connections: p99",p99_ms,lower,26.9,26.3,27,58.7,58.2,59,node:http,2.182,PASS,,20261125-094221,
-A19a,2 request headers,rps,higher,217614,216741,218800,152558,152516,153263,node:http,1.426,PASS,,20261125-094221,
-A19b,12 request headers,rps,higher,181567,181416,185140,121380,121329,123602,node:http,1.496,PASS,,20261125-094221,12 request headers
-A19c,40 request headers,rps,higher,102924,98491,103631,66218,66214,66700,node:http,1.554,PASS,,20261125-094221,
-A19d,100 request headers,rps,higher,33485,33331,33657,32546,31214,32944,node:http,1.029,PASS,,20261125-094221,
-A19e,4 KB cookie,rps,higher,198226,191994,200895,140593,138087,143630,node:http,1.41,PASS,,20261125-094221,
-A19f,"2 KB query string, parsed",rps,higher,39287,38685,39730,37068,36351,37347,node:http,1.06,PASS,,20261125-094221,
-A20a,Pipelining depth 1,rps,higher,233642,232048,234119,161553,160943,162057,node:http,1.446,PASS,facil:client,20261125-094221,
-A20b,Pipelining depth 4,rps,higher,348049,343500,351870,222951,220190,224800,node:http,1.561,PASS,,20261125-094221,
-A20c,Pipelining depth 16,rps,higher,373962,372646,377600,245715,245616,247430,node:http,1.522,PASS,,20261125-094221,"Pipelining, depth 16"
-A21,Fixed 50k req/s: p99,p99_ms,lower,0.0553,0.0551,0.0558,0.0605,0.0605,0.0606,node:http,1.094,PASS,,20261125-094221,
-A22,Fixed 100k req/s: p99,p99_ms,lower,0.0499,0.0496,0.0513,0.082,0.0813,0.083,node:http,1.643,PASS,,20261125-094221,
-A24,JSON parse 1 KB POST,rps,higher,134780,133647,136120,111431,110949,112196,node:http,1.21,PASS,,20261125-094221,
-A25a,Float sum handler (1e5 floats),rps,higher,88119,87431,88492,15407,15328,15486,node:http,5.719,PASS,,20261125-094221,
-A25b,FNV-1a over 4 KB handler,rps,higher,129581,129451,129656,102904,102850,103162,node:http,1.259,PASS,,20261125-094221,
-A26,"Task-based tiny handler, 4 Julia threads",rps,higher,207469,205008,209276,174635,161802,174714,node:http,1.188,PASS,,20261125-171547,
-A27,"HTTPS JSON, keep-alive",rps,higher,156251,154998,157322,130859,129202,130945,node:https,1.194,PASS,,20261125-094221,"HTTPS JSON, keep-alive"
-A28,"Memory per idle WebSocket (10,000 open)",bytes_per_conn,lower,285,280,331,629,628,639,uWebSockets.js,2.207,PASS,,20261125-094221,
-A29,"WebSocket echo 64 B, 100 connections",msgs_per_s,higher,282130,281616,282168,279283,279186,279512,uWebSockets.js,1.01,PASS,,20261125-094221,WebSocket echo 64 B (uWS)
-A30,"WebSocket echo 64 B, 100 connections, vs ws",msgs_per_s,higher,282130,281616,282168,220829,217486,222582,ws,1.278,PASS,,20261125-094221,
-1,"CPU-bound handler, 8 cores",rps,higher,125898,125728,126026,121492,120301,122990,cluster W=8,1.036,PASS,,20261125-171547,"CPU-bound, 8 cores (Node cluster)"
-2,"Tiny reply (JSON), 4 cores",rps,higher,185948,184838,186748,179037,178150,179342,cluster W=4,1.039,PASS,,20261125-171547,"Tiny JSON, 4 cores (Node cluster)"
-3,"Tiny reply (JSON), 8 cores",rps,higher,170497,170351,171400,167826,167826,168197,cluster W=8,1.016,PASS,,20261125-171547,"Tiny JSON, 8 cores (Node cluster)"
-4,"Async (task) handler, tiny reply, 1 reactor + 2 Julia threads",rps,higher,209424,209207,211741,147050,146284,147057,node:http,1.424,PASS,,20261125-164821,"Task handler, 2 threads"
-5a,"HTTPS 100 KB, no-copy body",rps,higher,37681,37345,37700,30140,30027,30591,node:https,1.25,PASS,,20261125-094221,
-5b,"HTTPS 1 MB, no-copy body",rps,higher,4702,4656,4710,4104,3861,4129,node:https,1.146,PASS,,20261125-094221,
-6a,"Paced streaming from a Julia task, 10 x 1 KB, 1 ms apart",rps,higher,19027,18901,19032,9104,9029,9205,node:http,2.09,PASS,,20261125-170441,
-6b,"Paced streaming from a Julia task, 100 x 16 KB, 1 ms apart",rps,higher,1876,1867,1900,867,833,867,node:http,2.164,PASS,facil:client,20261125-170441,
-6c,"Paced streaming from a Julia task, 1000 x 1 KB, 1 ms apart",rps,higher,183,183,183,83.3,83.3,83.3,node:http,2.197,PASS,,20261125-170441,
-7-c10,"WebSocket echo 256 KB, 10 connections",msgs_per_s,higher,31275,30435,34396,33762,33640,35603,uWebSockets.js,0.9263,EXCEPTION,,20261125-163117,"WebSocket echo 256 KB, 10 conns (uWS)"
-7-c100,"WebSocket echo 256 KB, 100 connections",msgs_per_s,higher,25508,24617,26203,25247,23179,26789,uWebSockets.js,1.01,PASS,,20261125-163117,"WebSocket echo 256 KB, 100 conns (uWS)"
-7-c1000,"WebSocket echo 256 KB, 1000 connections",msgs_per_s,higher,17539,17261,17598,17650,15263,18157,uWebSockets.js,0.9937,FAIL,,20261125-163117,
-7b-64,"WebSocket echo 64 B, 10 connections",msgs_per_s,higher,236774,234401,240443,221249,96984,235812,uWebSockets.js,1.07,PASS,,20261125-163117,
-7b-1k,"WebSocket echo 1 KB, 10 connections",msgs_per_s,higher,237687,230569,237710,229519,224194,235476,uWebSockets.js,1.036,PASS,,20261125-163117,
-7b-16k,"WebSocket echo 16 KB, 10 connections",msgs_per_s,higher,186228,181046,190067,182505,159091,186287,uWebSockets.js,1.02,PASS,,20261125-163117,
-8,"WebSocket permessage-deflate, 4 KB JSON echo, 100 connections",msgs_per_s,higher,57931,56457,59058,53917,51057,54964,uWebSockets.js,1.074,PASS,,20261125-163117,
-9,"10 MB chunked upload, buffered",rps,higher,686,656,725,501,459,508,node:http,1.369,PASS,,20261125-094221,
-10,"Memory, idle",rss_mb,lower,384,383,384,50.7,50.7,50.9,node:http,0.132,EXCEPTION,,20261125-094221,
-10-sysimg,"Memory, idle (Facil: PackageCompiler sysimage, /json-only server)",rss_mb,lower,324,324,324,50.7,50.7,50.9,node:http,0.1565,EXCEPTION,,20261125-094221,
-11,"Memory, 10,000 keep-alive connections under load",rss_max_mb,lower,449,441,449,248,221,269,node:http,0.5523,EXCEPTION,facil:errors,20261125-094221,
-12,Start-up to first response,startup_ms,lower,764,764,767,27.4,27.4,30.6,node:http,0.03586,EXCEPTION,,20261125-094221,
-12-sysimg,"Start-up to first response (Facil: PackageCompiler sysimage, /json-only server)",startup_ms,lower,314,313,317,27.4,27.4,30.6,node:http,0.08726,EXCEPTION,,20261125-094221,
-12-json,"Start-up to first response (Facil: plain julia, /json-only server)",startup_ms,lower,448,447,450,27.4,27.4,30.6,node:http,0.06116,EXCEPTION,,20261125-094221,
-13,First request,first_req_ms,lower,318,317,319,2.06,2.01,2.39,node:http,0.006478,EXCEPTION,,20261125-094221,
-13-sysimg,"First request (Facil: PackageCompiler sysimage, /json-only server)",first_req_ms,lower,6.92,6.67,6.99,2.06,2.01,2.39,node:http,0.2977,EXCEPTION,,20261125-094221,
-13-json,"First request (Facil: plain julia, /json-only server)",first_req_ms,lower,4.93,4.89,5.94,2.06,2.01,2.39,node:http,0.4178,EXCEPTION,,20261125-094221,
-14,"200 slow-header connections (slowloris), held after 150 s",held,lower,0,0,0,0,0,0,node:http,1,PASS,,20261125-094221,
-15,200 slow readers of 8 x 1 MB: RSS growth,rss_growth_mb,lower,2.3,1.9,2.7,10,9.3,11.1,node:http,4.348,PASS,,20261125-094221,
-17a,"Handler waits 1 ms (Facil.sleep), 100 connections",rps,higher,90131,90077,90138,60409,59949,60630,node:http,1.492,PASS,,20261125-165520,"Handler sleeps 1 ms, 100 connections"
-17b,"Handler waits 1 ms (Facil.sleep), 1000 connections",rps,higher,182376,167031,186807,134946,126709,139810,node:http,1.351,PASS,,20261125-165520,
-18a,"Handler waits 10 ms (Facil.sleep), 100 connections",rps,higher,9786,9780,9792,8384,8253,8444,node:http,1.167,PASS,,20261125-165520,
-18b,"Handler waits 10 ms (Facil.sleep), 1000 connections",rps,higher,97189,95296,97454,83366,82634,83427,node:http,1.166,PASS,,20261125-165520,
-19,Build a 50 KB JSON response,rps,higher,2402,2332,2406,12410,11396,12427,node:http,0.1936,EXCEPTION,,20261125-115157,
-19a,Build a 1 KB JSON response,rps,higher,69271,69255,69372,131376,130560,131661,node:http,0.5273,EXCEPTION,,20261125-115157,Build a 1 KB JSON response
-20,Task-based handler on 1 Julia thread,rps,higher,242086,231756,242639,180258,178972,181258,node:http,1.343,PASS,facil:client,20261125-165520,
-21a-p99,100 KB garbage per request at 10k req/s: p99,p99_ms,lower,0.223,0.207,0.248,0.142,0.141,0.142,node:http,0.6368,EXCEPTION,,20261125-115157,
-21a-p999,100 KB garbage per request at 10k req/s: p99.9,p999_ms,lower,2.92,2.66,3.04,0.156,0.155,0.177,node:http,0.05342,EXCEPTION,,20261125-115157,
-21b,"100 KB garbage per request, max rate",rps,higher,195378,191889,198106,133111,126255,138319,node:http,1.468,PASS,,20261125-115157,
-21b-p99,"100 KB garbage per request, max rate: p99",p99_ms,lower,1.22,1.2,1.26,1.34,1.06,1.83,node:http,1.098,PASS,,20261125-115157,
-21c,10 KB garbage per request at 10k req/s: p99.9,p999_ms,lower,0.321,0.315,0.354,0.347,0.295,0.445,node:http,1.081,PASS,,20261125-115157,
-22,p99.9 at a light 10k req/s,p999_ms,lower,0.247,0.205,0.335,0.271,0.183,0.331,node:http,1.097,PASS,,20261125-115157,
-23a,"New connection per request, 100 clients",rps,higher,33981,33419,34299,33334,33199,33408,node:http,1.019,PASS,"facil:errors, node:errors",20261125-094221,
-23b,"New connection per request, 10 clients",rps,higher,34365,32539,35178,34562,30479,35943,node:http,0.9943,FAIL,,20261125-094221,
-24a,"Upload 10 MB, default body handling (no spooling)",rps,higher,926,899,958,699,675,711,node:http,1.325,PASS,,20261125-094221,
-24b,"Upload 100 MB, default body handling (no spooling)",rps,higher,116,115,116,76.3,76,77.3,node:http,1.52,PASS,,20261125-094221,
-25,Upload 1 MB streamed through a task: requests per server CPU-second,req_per_cpu_s,higher,8484,8448,8549,11433,11119,11483,node:http,0.7421,EXCEPTION,,20261125-164821,
-26,"WebSocket broadcast, 10,000 subscribers x 100 Hz",deliveries_per_s,higher,200091,155504,229910,213212,163857,228051,uWebSockets.js,0.9385,EXCEPTION,"facil:errors, node:errors",20261125-163117,
-27,Streamed gzip of 100 KB JSON,rps,higher,10523,10396,10727,6297,6217,6468,node:http,1.671,PASS,,20261125-164821,"Streamed gzip, 100 KB JSON"
-28a,Whole response 32 KB (gather-write),rps,higher,152256,151424,153173,107072,106219,107509,node:http,1.422,PASS,facil:client,20261125-094221,
-28b,Whole response 100 KB (gather-write),rps,higher,89248,88683,89515,73109,72917,73568,node:http,1.221,PASS,facil:client,20261125-094221,
-29,Whole response 1 MB (gather-write),rps,higher,6541,6523,6559,6556,6431,6569,node:http,0.9977,FAIL,"facil:client, node:client",20261125-094221,
-30a,"Brotli level 4, 100 KB JSON, on the event loop",rps,higher,3317,3304,3331,3150,3147,3151,node:http,1.053,PASS,,20261125-094221,
-30b,"zstd level 3, 100 KB JSON, on the event loop",rps,higher,9224,9217,9235,8425,8423,8427,node:http,1.095,PASS,,20261125-094221,
-31-p99,Task handler at 10k req/s: p99,p99_ms,lower,0.173,0.172,0.224,0.142,0.14,0.147,node:http,0.8208,EXCEPTION,,20261125-164821,
-31-cpu,Task handler at 10k req/s: server cores used,server_cores,lower,0.179,0.175,0.179,0.147,0.143,0.148,node:http,0.8212,EXCEPTION,,20261125-164821,
-32,"Longest single pause at 10k req/s, no garbage",max_ms,lower,4.67,3.64,5.06,3.96,2.1,4.5,node:http,0.848,EXCEPTION,,20261125-115157,
+A1,"Tiny reply, 1 core",rps,higher,248626,243783,250633,179610,179593,180785,node:http,1.384,PASS,,20261126-212620,"Tiny reply, 1 core"
+A2,"150-byte JSON, 1 core",rps,higher,231505,224879,233091,158620,156310,160103,node:http,1.459,PASS,,20261126-212620,"150-byte JSON, 1 core"
+A3,POST echo,rps,higher,214696,213187,214894,136737,132307,137078,node:http,1.57,PASS,,20261126-212620,POST echo
+A4,100 KB response,rps,higher,108805,98797,110992,85383,80905,86385,node:http,1.274,PASS,,20261126-212620,100 KB response
+A5,1 MB response,rps,higher,16454,16161,16641,15899,15609,16056,node:http,1.035,PASS,,20261126-212620,
+A6,"CPU-bound handler (FNV 3x16 KB), 1 core",rps,higher,17049,17041,17084,16546,16294,16615,node:http,1.03,PASS,,20261126-234001,
+A7,"CPU-bound handler, 2 cores",rps,higher,35970,35253,36718,36054,35882,36126,cluster W=2,0.9977,FAIL,,20261126-234001,
+A8,"CPU-bound handler, 4 cores",rps,higher,68475,68325,68576,62980,62973,63220,cluster W=4,1.087,PASS,,20261126-212620,
+A9,"1M requests, 10 per connection (client resets)",rps,higher,186781,185654,187692,146217,144476,146395,node:http,1.277,PASS,,20261126-212620,
+A9-p99,"1M requests, 10 per connection: p99",p99_ms,lower,1.24,1.22,1.25,6.28,6.25,6.29,node:http,5.065,PASS,,20261126-212620,
+A10,"10,000 keep-alive connections: server CPU per request",cpu_us_per_req,lower,5.33,5.3,6.65,8.61,8.52,8.71,node:http,1.615,PASS,facil:errors,20261126-212620,
+A11,"gzip responses (100 KB JSON, level 6, off the event loop)",rps,higher,11936,11393,12069,7501,7494,7671,node:http,1.591,PASS,,20261126-212620,"gzip, 100 KB JSON"
+A12a,"Upload 1 KB, in memory",rps,higher,205115,202356,205174,139311,139222,139399,node:http,1.472,PASS,,20261126-212620,
+A12b,"Upload 64 KB, in memory",rps,higher,98315,97974,107729,67957,66011,68498,node:http,1.447,PASS,,20261126-212620,Upload 64 KB
+A12c,"Upload 1 MB, in memory",rps,higher,12452,12337,12934,8812,8209,9075,node:http,1.413,PASS,,20261126-212620,
+A13a,"TLS handshakes, ECDSA full, 10 clients",rps,higher,7153,7102,7240,6780,6698,6791,node:https,1.055,PASS,,20261126-212620,"TLS handshakes, ECDSA"
+A13b,"TLS handshakes, RSA full, 10 clients",rps,higher,2281,2270,2288,2216,2215,2225,node:https,1.029,PASS,,20261126-212620,
+A13c,"TLS handshakes, RSA resumed, 10 clients",rps,higher,8079,8008,8237,7848,7580,8050,node:https,1.029,PASS,,20261126-212620,
+A14,"WebSocket broadcast, 1,000 subscribers x 1,000 Hz",deliveries_per_s,higher,999968,676551,999968,768182,437995,999809,uWebSockets.js,1.302,PASS,,20261126-234001,"WS broadcast, 1k subs x 1 kHz (uWS)"
+A15a,"Streaming 10 x 1 KB chunks, no delay, 50 conns",rps,higher,165013,162987,165269,90197,89707,91424,node:http,1.829,PASS,facil:client,20261126-212620,
+A15b,"Streaming 100 x 16 KB chunks, no delay",rps,higher,3756,3708,3866,3701,3530,3729,node:http,1.015,PASS,"facil:client, node:client",20261126-212620,
+A15c,"Streaming 10 x 1 MB chunks, no delay",rps,higher,1296,1201,1361,1328,1237,1381,node:http,0.9759,FAIL,,20261126-234001,
+A16,"Keep-alive, 1,000 connections",rps,higher,212510,207328,216380,135408,132048,136524,node:http,1.569,PASS,,20261126-212620,"Keep-alive, 1,000 connections"
+A17,"Keep-alive, 10,000 connections",rps,higher,170352,88516,424968,115816,115276,117874,node:http,1.471,PASS,facil:errors,20261126-234001,"Keep-alive, 10,000 connections"
+A18,"Keep-alive, 5,000 connections: p99",p99_ms,lower,28.3,28.1,31.7,61,61,61.4,node:http,2.155,PASS,,20261126-212620,
+A19a,2 request headers,rps,higher,214848,210463,219614,151081,150638,151343,node:http,1.422,PASS,,20261126-212620,
+A19b,12 request headers,rps,higher,180306,180011,186451,119792,118284,120369,node:http,1.505,PASS,,20261126-212620,12 request headers
+A19c,40 request headers,rps,higher,95105,95045,98583,64912,64296,65541,node:http,1.465,PASS,,20261126-212620,
+A19d,100 request headers,rps,higher,31167,30608,32198,31900,31435,32069,node:http,0.977,FAIL,,20261126-234001,
+A19e,4 KB cookie,rps,higher,196719,195725,197672,143261,142799,144003,node:http,1.373,PASS,,20261126-212620,
+A19f,"2 KB query string, parsed",rps,higher,38700,38274,39465,37382,37025,37971,node:http,1.035,PASS,,20261126-212620,
+A20a,Pipelining depth 1,rps,higher,231263,230771,232768,159188,159140,159385,node:http,1.453,PASS,facil:client,20261126-212620,
+A20b,Pipelining depth 4,rps,higher,345916,338098,352093,223286,222736,225238,node:http,1.549,PASS,,20261126-212620,
+A20c,Pipelining depth 16,rps,higher,374122,370291,377155,241882,238646,243757,node:http,1.547,PASS,,20261126-212620,"Pipelining, depth 16"
+A21,Fixed 50k req/s: p99,p99_ms,lower,0.0594,0.0584,0.0601,0.0687,0.0626,0.0723,node:http,1.157,PASS,,20261126-212620,
+A22,Fixed 100k req/s: p99,p99_ms,lower,0.0597,0.0587,65.2,0.0925,0.0885,27.1,node:http,1.549,PASS,,20261126-212620,
+A24,JSON parse 1 KB POST,rps,higher,133121,130994,135378,109214,107541,110322,node:http,1.219,PASS,,20261126-212620,
+A25a,Float sum handler (1e5 floats),rps,higher,87259,86535,87603,15351,15084,15664,node:http,5.684,PASS,,20261126-212620,
+A25b,FNV-1a over 4 KB handler,rps,higher,126767,126245,127965,101975,101765,102417,node:http,1.243,PASS,,20261126-212620,
+A26,"Task-based tiny handler, 4 Julia threads",rps,higher,209930,209861,211323,181827,179144,181830,node:http,1.155,PASS,,20261126-212620,
+A27,"HTTPS JSON, keep-alive",rps,higher,156651,154736,157866,128953,126732,129398,node:https,1.215,PASS,,20261126-212620,"HTTPS JSON, keep-alive"
+A28,"Memory per idle WebSocket (10,000 open)",bytes_per_conn,lower,303,279,392,634,626,637,uWebSockets.js,2.092,PASS,,20261126-212620,
+A29,"WebSocket echo 64 B, 100 connections",msgs_per_s,higher,281369,280595,281951,276838,276117,277179,uWebSockets.js,1.016,PASS,,20261126-212620,WebSocket echo 64 B (uWS)
+A30,"WebSocket echo 64 B, 100 connections, vs ws",msgs_per_s,higher,281369,280595,281951,215912,214497,218086,ws,1.303,PASS,,20261126-212620,
+1,"CPU-bound handler, 8 cores",rps,higher,125159,125154,125492,121321,120253,123312,cluster W=8,1.032,PASS,,20261126-212620,"CPU-bound, 8 cores (Node cluster)"
+2,"Tiny reply (JSON), 4 cores",rps,higher,186603,186274,186753,179389,179282,179790,cluster W=4,1.04,PASS,,20261126-212620,"Tiny JSON, 4 cores (Node cluster)"
+3,"Tiny reply (JSON), 8 cores",rps,higher,171092,169940,171488,169515,169293,169678,cluster W=8,1.009,PASS,,20261126-212620,"Tiny JSON, 8 cores (Node cluster)"
+4,"Async (task) handler, tiny reply, 1 reactor + 2 Julia threads",rps,higher,217575,216386,219195,153190,152143,154667,node:http,1.42,PASS,,20261126-212620,"Task handler, 2 threads"
+5a,"HTTPS 100 KB, no-copy body",rps,higher,37215,36890,37244,29855,29648,29920,node:https,1.247,PASS,,20261126-212620,
+5b,"HTTPS 1 MB, no-copy body",rps,higher,4648,4644,4687,4018,4006,4049,node:https,1.157,PASS,,20261126-212620,
+6a,"Paced streaming from a Julia task, 10 x 1 KB, 1 ms apart",rps,higher,19072,19016,19096,8227,8223,8302,node:http,2.318,PASS,facil:client,20261126-212620,
+6b,"Paced streaming from a Julia task, 100 x 16 KB, 1 ms apart",rps,higher,1874,1870,1875,800,800,833,node:http,2.342,PASS,facil:client,20261126-212620,
+6c,"Paced streaming from a Julia task, 1000 x 1 KB, 1 ms apart",rps,higher,183,183,183,66.7,66.7,66.7,node:http,2.744,PASS,,20261126-212620,
+7-c10,"WebSocket echo 256 KB, 10 connections",msgs_per_s,higher,36428,36071,36693,37049,36895,37609,uWebSockets.js,0.9832,EXCEPTION,,20261126-212620,"WebSocket echo 256 KB, 10 conns (uWS)"
+7-c100,"WebSocket echo 256 KB, 100 connections",msgs_per_s,higher,26764,26520,26828,26850,22381,27243,uWebSockets.js,0.9968,FAIL,,20261126-234001,"WebSocket echo 256 KB, 100 conns (uWS)"
+7-c1000,"WebSocket echo 256 KB, 1000 connections",msgs_per_s,higher,17120,15015,18086,18412,17321,19415,uWebSockets.js,0.9298,FAIL,,20261126-212620,
+7b-64,"WebSocket echo 64 B, 10 connections",msgs_per_s,higher,249904,249680,250963,244756,244554,245058,uWebSockets.js,1.021,PASS,,20261126-212620,
+7b-1k,"WebSocket echo 1 KB, 10 connections",msgs_per_s,higher,247508,247305,248023,240894,240613,241137,uWebSockets.js,1.027,PASS,,20261126-212620,
+7b-16k,"WebSocket echo 16 KB, 10 connections",msgs_per_s,higher,187787,187497,188286,183543,182685,184285,uWebSockets.js,1.023,PASS,,20261126-212620,
+8,"WebSocket permessage-deflate, 4 KB JSON echo, 100 connections",msgs_per_s,higher,58510,58408,58568,54616,53924,54762,uWebSockets.js,1.071,PASS,,20261126-212620,
+9,"10 MB chunked upload, buffered",rps,higher,697,692,752,486,486,495,node:http,1.434,PASS,,20261126-212620,
+10,"Memory, idle",rss_mb,lower,387,387,390,51,50.8,51.1,node:http,0.1318,EXCEPTION,,20261126-212620,
+10-sysimg,"Memory, idle (Facil: PackageCompiler sysimage, /json-only server)",rss_mb,lower,335,335,335,51,50.8,51.1,node:http,0.1522,EXCEPTION,,20261126-212620,
+11,"Memory, 10,000 keep-alive connections under load",rss_max_mb,lower,433,418,440,248,230,289,node:http,0.5727,EXCEPTION,facil:errors,20261126-212620,
+12,Start-up to first response,startup_ms,lower,881,879,883,29.3,29.1,31.2,node:http,0.03326,EXCEPTION,,20261126-234001,
+12-sysimg,"Start-up to first response (Facil: PackageCompiler sysimage, /json-only server)",startup_ms,lower,397,395,427,29.3,29.1,31.2,node:http,0.0738,EXCEPTION,,20261126-234001,
+12-json,"Start-up to first response (Facil: plain julia, /json-only server)",startup_ms,lower,566,555,583,29.3,29.1,31.2,node:http,0.05177,EXCEPTION,,20261126-234001,
+13,First request,first_req_ms,lower,310,310,316,2.11,2.05,2.14,node:http,0.006806,EXCEPTION,,20261126-212620,
+13-sysimg,"First request (Facil: PackageCompiler sysimage, /json-only server)",first_req_ms,lower,5.2,4.93,5.3,2.1,2.09,2.13,node:http,0.4038,EXCEPTION,,20261126-234001,
+13-json,"First request (Facil: plain julia, /json-only server)",first_req_ms,lower,5.11,4.99,5.61,2.1,2.09,2.13,node:http,0.411,EXCEPTION,,20261126-234001,
+14,"200 slow-header connections (slowloris), held after 150 s",held,lower,0,0,0,0,0,0,node:http,1,PASS,,20261126-212620,
+15,200 slow readers of 8 x 1 MB: RSS growth,rss_growth_mb,lower,2.5,2.1,2.8,10.4,8.8,10.6,node:http,4.16,PASS,,20261126-212620,
+17a,"Handler waits 1 ms (Facil.sleep), 100 connections",rps,higher,85941,84396,86036,55382,55372,55836,node:http,1.552,PASS,,20261126-212620,"Handler sleeps 1 ms, 100 connections"
+17b,"Handler waits 1 ms (Facil.sleep), 1000 connections",rps,higher,164400,159274,172488,124145,123037,129893,node:http,1.324,PASS,,20261126-212620,
+18a,"Handler waits 10 ms (Facil.sleep), 100 connections",rps,higher,9795,9756,9800,7624,7580,7627,node:http,1.285,PASS,,20261126-212620,
+18b,"Handler waits 10 ms (Facil.sleep), 1000 connections",rps,higher,96309,96261,96391,81000,79721,81088,node:http,1.189,PASS,,20261126-212620,
+19,Build a 50 KB JSON response,rps,higher,2333,2192,2361,12071,11185,12155,node:http,0.1933,EXCEPTION,,20261126-212620,
+19a,Build a 1 KB JSON response,rps,higher,67053,66208,67298,127284,125974,127944,node:http,0.5268,EXCEPTION,,20261126-212620,Build a 1 KB JSON response
+20,Task-based handler on 1 Julia thread,rps,higher,244754,243000,245741,181827,179144,181830,node:http,1.346,PASS,facil:client,20261126-212620,
+21a-p99,100 KB garbage per request at 10k req/s: p99,p99_ms,lower,0.229,0.229,0.23,0.145,0.144,0.145,node:http,0.6332,EXCEPTION,,20261126-212620,
+21a-p999,100 KB garbage per request at 10k req/s: p99.9,p999_ms,lower,2.94,2.89,2.96,0.161,0.16,0.161,node:http,0.05476,EXCEPTION,,20261126-212620,
+21b,"100 KB garbage per request, max rate",rps,higher,195114,191997,196821,133225,130872,134420,node:http,1.465,PASS,,20261126-234001,
+21b-p99,"100 KB garbage per request, max rate: p99",p99_ms,lower,1.33,1.32,1.35,0.943,0.919,1.16,node:http,0.709,FAIL,,20261126-234001,
+21c,10 KB garbage per request at 10k req/s: p99.9,p999_ms,lower,0.274,0.27,0.279,0.161,0.157,0.191,node:http,0.5876,FAIL,,20261126-234001,
+22,p99.9 at a light 10k req/s,p999_ms,lower,0.189,0.175,0.215,0.165,0.159,0.204,node:http,0.873,FAIL,,20261126-234001,
+23a,"New connection per request, 100 clients",rps,higher,34188,33718,35414,35183,33637,36815,node:http,0.9717,FAIL,"facil:errors, node:errors",20261126-234001,
+23b,"New connection per request, 10 clients",rps,higher,35644,35143,35750,34900,34564,36175,node:http,1.021,PASS,,20261126-234001,
+24a,"Upload 10 MB, default body handling (no spooling)",rps,higher,990,954,997,662,651,668,node:http,1.495,PASS,,20261126-212620,
+24b,"Upload 100 MB, default body handling (no spooling)",rps,higher,121,120,122,73.3,72.6,73.8,node:http,1.651,PASS,,20261126-212620,
+25,Upload 1 MB streamed through a task: requests per server CPU-second,req_per_cpu_s,higher,2431,2404,2444,11585,11493,12260,node:http,0.2098,EXCEPTION,,20261126-234001,
+26,"WebSocket broadcast, 10,000 subscribers x 100 Hz",deliveries_per_s,higher,192679,160612,206117,228400,193176,235306,uWebSockets.js,0.8436,EXCEPTION,"facil:errors, node:errors",20261126-234001,
+27,Streamed gzip of 100 KB JSON,rps,higher,11257,11232,11336,6348,6279,6509,node:http,1.773,PASS,,20261126-212620,"Streamed gzip, 100 KB JSON"
+28a,Whole response 32 KB (gather-write),rps,higher,147285,146091,147904,103605,102069,106496,node:http,1.422,PASS,facil:client,20261126-212620,
+28b,Whole response 100 KB (gather-write),rps,higher,84843,83968,85579,70219,68800,72533,node:http,1.208,PASS,facil:client,20261126-212620,
+29,Whole response 1 MB (gather-write),rps,higher,6367,6213,6395,6343,6321,6387,node:http,1.004,PASS,"facil:client, node:client",20261126-234001,
+30a,"Brotli level 4, 100 KB JSON, on the event loop",rps,higher,3330,3304,3332,3159,3073,3166,node:http,1.054,PASS,,20261126-212620,
+30b,"zstd level 3, 100 KB JSON, on the event loop",rps,higher,9151,9131,9193,8299,8235,8338,node:http,1.103,PASS,,20261126-212620,
+31-p99,Task handler at 10k req/s: p99,p99_ms,lower,0.171,0.171,0.171,0.143,0.142,0.143,node:http,0.8363,EXCEPTION,,20261126-212620,
+31-cpu,Task handler at 10k req/s: server cores used,server_cores,lower,0.179,0.177,0.181,0.15,0.148,0.15,node:http,0.838,EXCEPTION,,20261126-212620,
+32,"Longest single pause at 10k req/s, no garbage",max_ms,lower,2.61,2.53,3.13,0.419,0.415,3.06,node:http,0.1605,EXCEPTION,,20261126-234001,
