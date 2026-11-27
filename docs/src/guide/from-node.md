@@ -43,8 +43,9 @@ Julia threads at once, so shared state needs a lock or atomics.
 |---|---|
 | `req.method === 'GET'` | `method(req) == Methods.GET` (or `== "GET"`) |
 | `req.url` | `uri(req)`; `string(uri(req))` for the text |
-| `new URL(req.url, base).pathname`, `req.path` | `path(uri(req))` (not percent-decoded) |
-| `url.searchParams`, `req.query` | `query(uri(req))` is the raw string or `nothing`; parse it with `URIs.queryparams` |
+| `new URL(req.url, base).pathname`, `req.path` | `path(uri(req))` as sent; [`decoded_path`](@ref)`(req)` percent-decoded |
+| `url.searchParams.get('k')`, `req.query.k` | [`query_param`](@ref)`(req, "k")`; [`query_params`](@ref)`(req)` for every pair (see [Query strings and forms](urls-and-forms.md)) |
+| `express.urlencoded()`, then `req.body` | [`parse_form`](@ref)`(req)` |
 | `req.headers['content-type']` | `get(headers(req), header.CONTENT_TYPE, nothing)` or `get(headers(req), "content-type", nothing)` |
 | `req.headers` (lower-cased object) | `headers(req)`, a [`HeaderMap`](@ref); iterate it for `name => value` pairs |
 | `req.httpVersion` | `version(req)` |
@@ -73,7 +74,8 @@ strings; use `as_str(value)` when you need a `String`.
 | `express.static('public')` | `public_folder = "public"` keyword |
 | `compression()` middleware | `compress = true` keyword |
 | `res.redirect(url)` | `Response(StatusCodes.FOUND; headers = [header.LOCATION => url])` |
-| `res.cookie(...)`, `req.cookies` | no helper; set and parse the `set-cookie` / `cookie` headers yourself |
+| `req.cookies` (cookie-parser) | [`cookies`](@ref)`(req; unescape = true)` |
+| `res.cookie(name, value, opts)`, `res.clearCookie(name)` | [`set_cookie!`](@ref)`(res, name, value; ...)`, [`delete_cookie!`](@ref)`(res, name)` (see [Cookies](cookies.md)) |
 
 Differences to keep in mind:
 

@@ -21,5 +21,7 @@ using Test
     include("conn_scale.jl")
     include("gc.jl")
     include("names.jl")
+    include("url.jl")
+    include("cookies.jl")
     include("docs_examples.jl")
 end

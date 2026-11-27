@@ -9,7 +9,9 @@
     "Guides" => [
         "Handlers and concurrency" => "guide/handlers.md",
         "Reading requests" => "guide/requests.md",
+        "Query strings and forms" => "guide/urls-and-forms.md",
         "Request bodies and uploads" => "guide/bodies.md",
+        "Cookies" => "guide/cookies.md",
         "Sending responses" => "guide/responses.md",
         "Routing" => "guide/routing.md",
         "JSON" => "guide/json.md",
@@ -34,6 +36,7 @@
         "Overview" => "api/index.md",
         "Server" => "api/server.md",
         "Request bodies" => "api/requests.md",
+        "Queries, forms and cookies" => "api/urls.md",
         "Responses" => "api/responses.md",
         "WebSockets and pub/sub" => "api/websockets.md",
         "HTTPS" => "api/tls.md",

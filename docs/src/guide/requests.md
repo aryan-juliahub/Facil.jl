@@ -97,9 +97,11 @@ path(u), query(u)
     decoding first would turn an encoded `/` (`%2F`) or `&` (`%26`) into a
     separator.
 
-[URIs.jl](https://github.com/JuliaWeb/URIs.jl) decodes both. `queryparams`
-splits and decodes a query string into a `Dict`, and `unescapeuri` decodes one
-path segment:
+[`query_param`](@ref), [`query_params`](@ref) and [`decoded_path`](@ref)
+split and decode them for you; [Query strings and forms](urls-and-forms.md)
+has the details. [URIs.jl](https://github.com/JuliaWeb/URIs.jl) works as well:
+`queryparams` splits and decodes a query string into a `Dict`, and
+`unescapeuri` decodes one path segment:
 
 ```@eval
 Main.example("requests_query.jl")
@@ -149,7 +151,8 @@ String.(accept), h["host"] == "example.com", startswith(as_str(h["accept"]), "te
 ```
 
 Facil does not join repeated headers or split comma-separated lists, and it
-does not parse cookies, `authorization` or `content-type` parameters. A request
+does not parse `authorization` or `content-type` parameters. For cookies, use
+[`cookies`](@ref)`(req)` (see [Cookies](cookies.md)). A request
 with two `Accept` lines has two values under `accept`; `h["accept"]` is the
 first.
 

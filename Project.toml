@@ -3,6 +3,7 @@ uuid = "8f23c55f-9d0e-4d29-b780-45826f841142"
 version = "0.1.0"
 
 [deps]
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 HttpTypes = "b4415c9e-73f1-48a2-913c-7fe2498276e8"
 Libdl = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
 OpenSSL_jll = "458c3c95-2e84-50aa-8efc-19380b2a3a95"
@@ -21,6 +22,7 @@ libdeflate_jll = "46979653-d7f6-5232-b59e-dd310c4598de"
 HttpTypes = {path = "lib/HttpTypes"}
 
 [compat]
+Dates = "1"
 HttpTypes = "0.1"
 Libdl = "1"
 OpenSSL_jll = "3"

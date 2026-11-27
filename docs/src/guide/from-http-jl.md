@@ -22,9 +22,9 @@ it against the HTTP.jl version you use; every Facil example is run.
   responses returned from that same function.
 - **Server only.** Facil has no HTTP client. Keep HTTP.jl or `Downloads` for
   outgoing requests.
-- **No router, cookies or forms.** Branch on method and path (see
-  [Routing](routing.md)); parse `cookie` headers and form bodies yourself or
-  with a package.
+- **No router.** Branch on method and path (see [Routing](routing.md)).
+  Query strings, form bodies and cookies have helpers: see
+  [Query strings and forms](urls-and-forms.md) and [Cookies](cookies.md).
 
 ## Names
 
@@ -36,7 +36,8 @@ it against the HTTP.jl version you use; every Facil example is run.
 | `req.method == "GET"` | `method(req) == Methods.GET` (comparing with `"GET"` also works) |
 | `req.target` | `uri(req)`; `path(uri(req))` and `query(uri(req))` |
 | `HTTP.URI(req.target).path` | `path(uri(req))` |
-| `HTTP.queryparams(HTTP.URI(req.target))` | `URIs.queryparams(something(query(uri(req)), ""))` |
+| `HTTP.queryparams(HTTP.URI(req.target))` | [`query_params`](@ref)`(req)` (pairs, repeats kept; `Dict(query_params(req))` for a `Dict`), [`query_param`](@ref)`(req, name)` for one |
+| `URIs.unescapeuri(s)`, `URIs.escapeuri(s)` | [`percent_decode`](@ref)`(s)`, [`percent_encode`](@ref)`(s)` |
 | `HTTP.header(req, "Content-Type", default)` | `get(headers(req), header.CONTENT_TYPE, default)` |
 | `HTTP.hasheader(req, "X-Id")` | `haskey(headers(req), "x-id")` |
 | `HTTP.headers(req, "Accept")` (all values) | `get_all(headers(req), header.ACCEPT)` |
@@ -54,7 +55,8 @@ it against the HTTP.jl version you use; every Facil example is run.
 | event streams written by hand in a stream handler | return [`sse`](@ref)`(req) do s ... end` |
 | `HTTP.serve(...; sslconfig = ...)` | `serve(...; tls = TLSConfig(cert, key))` |
 | `HTTP.get`, `HTTP.post`, `HTTP.request` | not available (no client) |
-| `HTTP.Cookies` | not available |
+| `HTTP.Cookies.cookies(req)` | [`cookies`](@ref)`(req)` |
+| `HTTP.Cookies.Cookie(...)`, `HTTP.Cookies.addcookie!(res, c)` | [`set_cookie!`](@ref)`(res, name, value; ...)`, [`delete_cookie!`](@ref) |
 
 Three rules explain most compile errors after a port:
 
@@ -98,9 +100,9 @@ Facil:
 Main.example("httpjl_app.jl")
 ```
 
-`query(uri(req))` is `nothing` when the target has no `?`, hence the
-`something(..., "")`. Facil does not decode the query; `URIs.queryparams`
-does (`URIs` is the package HTTP.jl itself uses).
+[`query_param`](@ref) decodes the query like `HTTP.queryparams` does (`+` is
+a space, `%XX` escapes are decoded) and returns the first value of the name.
+URIs.jl still works too: Facil's names do not clash with its exports.
 
 ## WebSocket echo
 

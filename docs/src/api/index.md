@@ -13,6 +13,7 @@ The same text is in the REPL: type `?serve!`.
 |:--|:--|
 | [Server](server.md) | [`serve`](@ref), [`serve!`](@ref), [`Server`](@ref) and stopping one |
 | [Request bodies](requests.md) | `before_body` results ([`Buffer`](@ref), [`Stream`](@ref), [`Spool`](@ref), [`Reject`](@ref)) and reading a body |
+| [Queries, forms and cookies](urls.md) | [`query_param`](@ref), [`query_params`](@ref), [`decoded_path`](@ref), [`parse_form`](@ref), [`cookies`](@ref), [`set_cookie!`](@ref) |
 | [Responses](responses.md) | [`stream`](@ref), [`sse`](@ref), [`sendfile`](@ref), [`CompressOptions`](@ref) |
 | [WebSockets and pub/sub](websockets.md) | [`websocket`](@ref), [`send`](@ref), [`publish`](@ref), [`subscribe`](@ref) |
 | [HTTPS](tls.md) | [`TLSConfig`](@ref), [`reload!`](@ref), [`TLSError`](@ref) |

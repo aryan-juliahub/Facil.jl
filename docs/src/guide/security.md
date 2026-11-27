@@ -7,8 +7,8 @@ checklist, not a guarantee: read it before you put a server on the internet.
 ## What Facil is, and is not
 
 Facil is an HTTP server library. It parses requests strictly, enforces size and
-time limits, and speaks TLS. It has **no** authentication, sessions, cookies
-helpers, CORS, CSRF protection, rate limiting or request filtering. Those are
+time limits, and speaks TLS. It has **no** authentication, sessions, cookie
+signing, CORS, CSRF protection, rate limiting or request filtering. Those are
 yours to write (examples below) or to put in a reverse proxy.
 
 Facil has not had an independent security audit. The C core is facil.io 0.7

@@ -1,8 +1,8 @@
-using Facil, URIs
+using Facil
 
 function app(req::Request)
     if method(req) == Methods.GET && path(uri(req)) == "/hello"
-        name = get(queryparams(something(query(uri(req)), "")), "name", "world")
+        name = query_param(req, "name"; default = "world")
         Response(StatusCodes.OK, "hello $name"; headers = [header.CONTENT_TYPE => "text/plain"])
     elseif method(req) == Methods.POST && path(uri(req)) == "/echo"
         ct = get(headers(req), header.CONTENT_TYPE, hv"application/octet-stream")

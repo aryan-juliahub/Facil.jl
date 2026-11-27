@@ -53,6 +53,14 @@ First version. Nothing has been released or registered yet.
 - `serve!` hands its keywords to code compiled in the package image, so a
   script's first `serve!` call compiles about 60 ms instead of 230 ms
   (start-up row 12: 868 to 701 ms).
+- Query strings, paths and forms: `query_param`, `query_params`,
+  `decoded_path` (returns `nothing` for `%2F`, `%00`, bad escapes or invalid
+  UTF-8), `parse_form`, `parse_query`, `percent_decode` and `percent_encode`.
+  WHATWG `URLSearchParams` rules; the names do not clash with URIs.jl's.
+- Cookies: `cookies(req)` (RFC 6265 lenient parsing, first value wins),
+  `set_cookie!` with `Path`, `Domain`, `Max-Age`, `Expires`, `Secure`,
+  `HttpOnly`, `SameSite`, `Partitioned`, and `delete_cookie!`. Invalid names,
+  values and attribute combinations throw an `ArgumentError`.
 
 - Fixes and behaviour changes after the first documentation pass:
   - Every status from 100 to 999 is sent with its own number. Before, `418`,
