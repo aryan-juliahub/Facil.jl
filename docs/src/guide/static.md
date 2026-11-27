@@ -151,7 +151,7 @@ For `public_folder` and `sendfile` alike:
 Things to know:
 
 - **Caching** is set per server for the public folder (see [Caching](#Caching)
-  below). A file from `sendfile` is always sent with
+  above). A file from `sendfile` is always sent with
   `cache-control: max-age=3600`, and a `cache-control` you pass to `sendfile`
   is replaced.
 - **The ETag is not a content hash.** A file rewritten within the same second

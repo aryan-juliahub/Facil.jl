@@ -107,7 +107,7 @@ Facil and facil.io complete the head:
 | `content-length` | always set by Facil from the body; a value you set is ignored |
 | `transfer-encoding` | set by Facil for streamed responses; a value you set is ignored |
 | `content-type` | if you set none and the body is not empty: `text/plain; charset=utf-8` for a string body, `application/octet-stream` for a byte body |
-| `date` | added by facil.io when you set none (not on streamed responses) |
+| `date` | added when you set none, on every response including streamed ones and event streams |
 | `last-modified` | added by facil.io, with the current time, when you set none (not on streamed responses) |
 | `connection` | `keep-alive` or `close`, added by facil.io when you set none |
 

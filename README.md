@@ -131,12 +131,13 @@ with a client.
 | Feature | Guide |
 |---|---|
 | Task and inline handlers, reactor threads | [Handlers and concurrency](https://aryan-juliahub.github.io/Facil.jl/dev/guide/handlers/) |
-| Reading requests; query strings; limits | [Reading requests](https://aryan-juliahub.github.io/Facil.jl/dev/guide/requests/) |
+| Reading requests, client address, disconnect detection; limits | [Reading requests](https://aryan-juliahub.github.io/Facil.jl/dev/guide/requests/) |
+| Query strings, decoded paths, URL-encoded forms; cookies | [Query strings and forms](https://aryan-juliahub.github.io/Facil.jl/dev/guide/urls-and-forms/), [Cookies](https://aryan-juliahub.github.io/Facil.jl/dev/guide/cookies/) |
 | Uploads: buffered, streamed, spooled to disk, rejected early | [Request bodies](https://aryan-juliahub.github.io/Facil.jl/dev/guide/bodies/) |
 | Responses, redirects, headers | [Sending responses](https://aryan-juliahub.github.io/Facil.jl/dev/guide/responses/) |
 | Routing without a framework; JSON | [Routing](https://aryan-juliahub.github.io/Facil.jl/dev/guide/routing/), [JSON](https://aryan-juliahub.github.io/Facil.jl/dev/guide/json/) |
 | Chunked streaming and server-sent events | [Streaming](https://aryan-juliahub.github.io/Facil.jl/dev/guide/streaming/), [SSE](https://aryan-juliahub.github.io/Facil.jl/dev/guide/sse/) |
-| Static files with ETag, ranges and `.gz` siblings | [Static files](https://aryan-juliahub.github.io/Facil.jl/dev/guide/static/) |
+| Static files with ETag, `If-Modified-Since`, ranges, `.gz` siblings, cache policy | [Static files](https://aryan-juliahub.github.io/Facil.jl/dev/guide/static/) |
 | zstd, brotli and gzip compression | [Compression](https://aryan-juliahub.github.io/Facil.jl/dev/guide/compression/) |
 | WebSockets and process-local pub/sub | [WebSockets](https://aryan-juliahub.github.io/Facil.jl/dev/guide/websockets/), [Pub/sub](https://aryan-juliahub.github.io/Facil.jl/dev/guide/pubsub/) |
 | HTTPS with SNI, client certificates, live certificate reload | [HTTPS](https://aryan-juliahub.github.io/Facil.jl/dev/guide/tls/) |
@@ -232,10 +233,10 @@ prototype Facil server and `autocannon -c 100 -w 4`: empty reply 236,422 against
   a `Host` header is required (400 without it).
 - On Julia 1.10 and 1.11 the SIGTERM drain cannot finish handlers that wait on
   I/O; Julia 1.12 and later drain every handler.
-- facil.io adds `date`, `last-modified` and `connection` when absent; Facil always
+- `date`, `last-modified` and `connection` are added when absent; Facil always
   sets `content-length`.
-- A client that disconnects while its handler runs is not noticed, and there is
-  no way to read a client's address.
+- A handler is not cancelled when its client disconnects. Task handlers can
+  check `isconnected(req)`; inline handlers cannot tell.
 - Response bodies are sent without a copy and must not be changed afterwards.
 - One reactor per process; HTTPS runs on one reactor thread.
 - Task handlers need more than one Julia thread; with one, handlers run inline.

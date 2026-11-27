@@ -169,9 +169,11 @@ and the handler is not called.
 
 The cost of `Stream()` with a task handler is the hand-off: every piece goes
 from the reactor thread to the handler's task. On the benchmark that measures
-it (a 1 MB upload streamed through a task, scoreboard row 25) Facil does 0.74×
+it (a 1 MB upload streamed through a task, scoreboard row 25) Facil does 0.21×
 the requests per CPU-second of Node.js, one of the approved exceptions listed
-on the [benchmarks page](../reference/benchmarks.md). Buffered uploads of the
+on the [benchmarks page](../reference/benchmarks.md). Most of that CPU is
+Julia's idle worker threads spinning between hand-offs; starting Julia with
+`JULIA_THREAD_SLEEP_THRESHOLD=0` gives 0.71×. Buffered uploads of the
 same size are faster than Node (rows A12c, 24a, 24b), and `Stream(on_chunk)`
 has no hand-off at all.
 

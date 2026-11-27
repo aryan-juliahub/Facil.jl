@@ -4,6 +4,12 @@
 
 First version. Nothing has been released or registered yet.
 
+> **Behaviour change:** `public_folder` no longer serves dotfiles by default.
+> `dotfiles = :deny` is now the default: a path with a part that starts with
+> a dot (`/.env`, `/.git/config`) reaches the handler as if the file did not
+> exist, except under `/.well-known`. Pass `dotfiles = :serve` for the
+> earlier behaviour.
+
 ### Server
 
 - `serve` (blocking) and `serve!` (returns a `Server`), with `close`, `wait`,
@@ -24,11 +30,9 @@ First version. Nothing has been released or registered yet.
 - Graceful shutdown with `close(server; grace)`; SIGTERM drains servers run with
   `serve` (`shutdown_grace`).
 - `Facil.sleep` and `Facil.Timer` / `every`, timed by a C timer thread.
-- Static files with `public_folder` and `sendfile`: ETag, `Last-Modified`,
-  conditional and single-range requests, precompressed `.gz` files,
-  `Facil.register_mime!`.
 - Streaming responses with `stream` (chunked on HTTP/1.1, keep-alive kept).
 - Server-sent events with `sse`, `write_event`, `last_event_id`.
+- Streamed responses and event streams carry a `date` header, like the others.
 - Compression with `compress = true` or `CompressOptions`: zstd, brotli and gzip
   (libdeflate, zlib-ng for long streams), also for streamed responses.
 - WebSockets with `websocket`: callbacks on the reactor or on tasks, `send` from
@@ -39,6 +43,41 @@ First version. Nothing has been released or registered yet.
 - HTTPS with `TLSConfig` (chains, encrypted keys, SNI, protocol range, ciphers,
   client certificates) and `reload!` for certificate rotation.
 - Callbacks precompiled with PrecompileTools.
+
+#### Requests: queries, forms, cookies, the client
+
+- Query strings, paths and forms: `query_param`, `query_params`,
+  `decoded_path` (returns `nothing` for `%2F`, `%00`, bad escapes or invalid
+  UTF-8), `parse_form`, `parse_query`, `percent_decode` and `percent_encode`.
+  WHATWG `URLSearchParams` rules; the names do not clash with URIs.jl's.
+- Cookies: `cookies(req)` (RFC 6265 lenient parsing, first value wins),
+  `set_cookie!` with `Path`, `Domain`, `Max-Age`, `Expires`, `Secure`,
+  `HttpOnly`, `SameSite`, `Partitioned`, and `delete_cookie!`. Invalid names,
+  values and attribute combinations throw an `ArgumentError`.
+- The client of a request: `client_address(req)` gives `(ip, port)` (IPv4 and
+  IPv6, HTTP and HTTPS, captured when the request arrives) and
+  `client_certificate(req)` the PEM certificate of a mutual-TLS client.
+- A task handler can learn that its client left: `isconnected(req)` and
+  `on_disconnect(f, req)`, within about half a second (the connection is
+  checked every 200 ms while watched). A half-close is told apart from a close
+  with one `100 Continue` interim response on HTTP/1.1; for HTTP/1.0 and
+  upgrade requests only a reset counts. Inline handlers get no detection.
+
+#### Static files
+
+- `public_folder` and `sendfile`: ETag, `Last-Modified`, conditional and
+  single-range requests, precompressed `.gz` files, `Facil.register_mime!`.
+- `If-Modified-Since` is honoured (`If-None-Match` wins when both are sent).
+- `static_cache_control` sets (or with `nothing` drops) the `cache-control`
+  of `public_folder` files; the default stays `max-age=3600`.
+- A directory asked for without its trailing slash gets a `301` to the path
+  with the slash when it has an `index.html`, query kept.
+- `dotfiles = :serve | :deny` (default `:deny`, `.well-known` always served;
+  see the behaviour change above) and `symlinks = :follow | :inside` (default
+  `:follow`).
+
+#### Performance
+
 - Task-handler worker pool fixes: a steady stream of newly spawned tasks can no
   longer starve older ones (Julia's run queue is not first-in first-out), and a
   runner yields its thread when other tasks wait for one. Streamed gzip (row 27)
@@ -53,31 +92,8 @@ First version. Nothing has been released or registered yet.
 - `serve!` hands its keywords to code compiled in the package image, so a
   script's first `serve!` call compiles about 60 ms instead of 230 ms
   (start-up row 12: 868 to 701 ms).
-- Query strings, paths and forms: `query_param`, `query_params`,
-  `decoded_path` (returns `nothing` for `%2F`, `%00`, bad escapes or invalid
-  UTF-8), `parse_form`, `parse_query`, `percent_decode` and `percent_encode`.
-  WHATWG `URLSearchParams` rules; the names do not clash with URIs.jl's.
-- Cookies: `cookies(req)` (RFC 6265 lenient parsing, first value wins),
-  `set_cookie!` with `Path`, `Domain`, `Max-Age`, `Expires`, `Secure`,
-  `HttpOnly`, `SameSite`, `Partitioned`, and `delete_cookie!`. Invalid names,
-  values and attribute combinations throw an `ArgumentError`.
-- The client of a request: `client_address(req)` gives `(ip, port)` (IPv4 and
-  IPv6, HTTP and HTTPS, captured when the request arrives) and
-  `client_certificate(req)` the PEM certificate of a mutual-TLS client. A
-  task handler can learn that its client left: `isconnected(req)` and
-  `on_disconnect(f, req)`, within about half a second; a half-close is told
-  apart from a close with one `100 Continue` interim response (HTTP/1.1).
-  facil.io patch 23 records the peer port and exposes the TLS peer
-  certificate; the shim ABI is now 3.
-- Streamed responses and event streams carry a `date` header, like the others.
-- Static files: `static_cache_control` sets (or with `nothing` drops) the
-  `cache-control` of `public_folder` files; `If-Modified-Since` is honoured
-  (`If-None-Match` wins when both are sent); a directory asked for without
-  its trailing slash gets a `301` to the path with the slash when it has an
-  `index.html`, query kept (facil.io patch 24).
-- Behaviour change: `public_folder` no longer serves dotfiles by default
-  (`dotfiles = :deny` is the default; `.well-known` is still served). Pass
-  `dotfiles = :serve` for the earlier behaviour.
+
+#### Fixes
 
 - Fixes and behaviour changes after the first documentation pass:
   - Every status from 100 to 999 is sent with its own number. Before, `418`,
@@ -89,9 +105,7 @@ First version. Nothing has been released or registered yet.
   - A request line with a space inside the target (`GET /a b HTTP/1.1`) gets a
     `400`; before, the handler saw the target up to the space.
   - `public_folder`: a path with an encoded NUL (`%00`) gets a `400`; before,
-    the NUL cut the file name short (`/a.txt%00.png` served `a.txt`). New
-    keywords `dotfiles = :serve | :deny` and `symlinks = :follow | :inside`;
-    the defaults keep the earlier behaviour.
+    the NUL cut the file name short (`/a.txt%00.png` served `a.txt`).
   - An unknown `serve` or `serve!` keyword throws an `ArgumentError` that names
     the closest valid keyword; before, a `MethodError` about
     `Facil.ServerOptions`.
@@ -168,13 +182,19 @@ First version. Nothing has been released or registered yet.
 
 ### C library
 
-- facil.io pinned at `51287473` with 22 patches (`deps/patches`): temp-file
+- facil.io pinned at `51287473` with 24 patches (`deps/patches`): temp-file
   cleanup, exact timers, gather-write send path, close races, TLS layer,
   HTTP robustness, file-descriptor capacity, request bodies, WebSocket fixes and
   controls, TLS write buffer, WebSocket performance, kqueue re-arm batching,
   epoll uuid events, a shared HTTP/1.1 read buffer, close-marker race, reactor
   thread wake-up, per-thread kqueues, the slow-reader guard for writes that
-  would block, HTTP conformance, WebSocket shutdown, and half-closed clients.
+  would block, HTTP conformance, WebSocket shutdown, half-closed clients,
+  peer info and static files.
+- Patch 24 (`static-files`): `If-Modified-Since`, the directory `301`, a
+  settable `cache-control` for the public folder, and `.well-known` under
+  dotfile denial.
+- Patch 23 (`peer-info`): the peer's TCP port at accept, a connection's hook
+  state, and the certificate of a TLS client as PEM.
 - Patch 22 (`half-close`): the poll loops read what a peer sent before its
   FIN (or reset) instead of closing the connection unread; the C side of the
   half-close fix listed under Server.
@@ -189,6 +209,9 @@ First version. Nothing has been released or registered yet.
   `close()` that could hang in the kernel forever (an unkillable process).
 - `deps/shim/fjl_async.c`: a paused request is linked to its connection and
   dropped when that closes, instead of being resumed by its id.
+- `deps/shim`: the client of a request (`fjl_req_peer`), connection watching
+  for disconnect detection (`fjl_async_watch`), a per-server public-folder
+  `cache-control`, and `date` on streamed heads. Shim ABI 3.
 - A C shim (`deps/shim`) for request reading, no-copy sends, task hand-off,
   bodies, streaming, timers, WebSockets and TLS.
 - `deps/build_local.jl` builds the library with the system C compiler.

@@ -1,4 +1,4 @@
-using Facil, JSON, URIs
+using Facil, JSON
 
 #= snippet: storage =#
 struct Note
@@ -21,8 +21,7 @@ problem(status, message) = json(status, (error = message,))
 
 #= snippet: list =#
 function list_notes(req)
-    params = queryparams(something(query(uri(req)), ""))
-    q = lowercase(get(params, "q", ""))
+    q = lowercase(query_param(req, "q"; default = ""))
     notes = lock(NOTES_LOCK) do
         sort!([n for n in values(NOTES) if occursin(q, lowercase(n.title))]; by = n -> n.id)
     end

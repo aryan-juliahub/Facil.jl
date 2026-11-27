@@ -55,8 +55,10 @@ Each guide covers one task with complete programs you can copy.
 | [Handlers and concurrency](guide/handlers.md) | [Sending responses](guide/responses.md) | [WebSockets](guide/websockets.md) |
 | [Reading requests](guide/requests.md) | [Streaming responses](guide/streaming.md) | [Pub/sub](guide/pubsub.md) |
 | [Request bodies and uploads](guide/bodies.md) | [Server-sent events](guide/sse.md) | [Timers](guide/timers.md) |
-| [Routing](guide/routing.md) | [Static files](guide/static.md) | |
-| [JSON](guide/json.md) | [Compression](guide/compression.md) | |
+| [Query strings and forms](guide/urls-and-forms.md) | [Static files](guide/static.md) | |
+| [Cookies](guide/cookies.md) | [Compression](guide/compression.md) | |
+| [Routing](guide/routing.md) | | |
+| [JSON](guide/json.md) | | |
 
 | Running in production | |
 |:--|:--|
@@ -71,12 +73,13 @@ Each guide covers one task with complete programs you can copy.
   them.
 - **Linux and macOS.** On Windows, use WSL2
   ([Platform support](reference/platforms.md)).
-- **Not registered yet.** Installing needs a clone and a C compiler for now.
+- **Not registered yet.** Installing is `Pkg.add` by URL and needs a C
+  compiler for now.
 - **A server, not a framework.** There is no router, no middleware stack and
   no HTTP client. Handlers are functions; the guides show how far that goes.
-- **Fast, with known exceptions.** Facil is at or above Node.js on 76 of the
+- **Fast, with known exceptions.** Facil is at or above Node.js on 72 of the
   100 rows of its [benchmark scoreboard](reference/benchmarks.md) and within
-  4% on 5 more; start-up time, memory and garbage-collection pauses are where
+  5% on 5 more; start-up time, memory and garbage-collection pauses are where
   it is behind.
 
 [Limits](reference/limits.md) is the full, plain list.

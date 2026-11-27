@@ -35,9 +35,11 @@ The keyword limits are per server; see [Configuration](configuration.md).
 - The `408` is sent to a client that is still trickling its request head when
   `header_timeout` expires. A client that sends part of a head and then
   nothing is closed without a response when the idle `timeout` expires.
-- **Paths and query strings are not percent-decoded and not split.**
-  `path(uri(req))` is what the client sent. Decode with URIs.jl
-  ([Reading requests](../guide/requests.md)).
+- **`path(uri(req))` and `query(uri(req))` are what the client sent**: not
+  percent-decoded, not split, not normalised. [`decoded_path`](@ref) and
+  [`query_param`](@ref) decode them; `decoded_path` returns `nothing` for an
+  encoded `/` or NUL, a bad escape or invalid UTF-8, and does not resolve
+  `..` ([Query strings and forms](../guide/urls-and-forms.md)).
 - A request line must be `method SP target SP version`: one with a further
   space (`GET /a b HTTP/1.1`) gets a `400`.
 
@@ -49,11 +51,11 @@ The keyword limits are per server; see [Configuration](configuration.md).
 - **`1xx`, `204` and `304` responses are sent without a body** and without
   `content-length` or a default `content-type`, even when the `Response` has
   a body. Other headers are sent as set.
-- **`date`, `last-modified` and `connection` are added** to every
-  non-streamed response that does not set them. `last-modified` is the time
-  of the response, which tells caches the content just changed; set your own
-  `last-modified` or `cache-control` on anything you want cached.
-- **Streamed responses carry no `date` header.**
+- **`date` and `connection` are added** to every response that does not set
+  them, streamed ones and event streams included. **`last-modified` is added**
+  to every non-streamed one: it is the time of the response, which tells
+  caches the content just changed; set your own `last-modified` or
+  `cache-control` on anything you want cached.
 - **`content-length` and `transfer-encoding` are set by Facil.** Values you
   set are ignored.
 - **A `204` or `304` response keeps a body if you give it one.** Do not give
@@ -75,12 +77,22 @@ The keyword limits are per server; see [Configuration](configuration.md).
   `spawn = true`, `subscribe(f, channel)` callbacks without `spawn = true`.
   One that blocks stalls every connection on that thread.
 - **HTTPS needs `reactors = 1`.**
-- **No disconnect detection during a handler, and no cancellation.** A client
-  that goes away while its handler runs is not noticed; the handler finishes
-  and the result is discarded. Streamed responses and event streams do notice
-  (`isopen`). A client that only shuts down its write side after its request
-  (a half-close) still gets its response; see
-  [A client that goes away](../guide/handlers.md#A-client-that-goes-away).
+- **No cancellation.** A handler whose client goes away runs to the end and
+  its result is discarded, unless it checks for itself:
+  - A task handler can ask [`isconnected`](@ref) or register
+    [`on_disconnect`](@ref). The connection is checked every 200 ms once
+    something watches it, so a close is seen within about half a second.
+  - An **inline handler gets no detection**: `isconnected` is always `true`
+    and `on_disconnect` does nothing, because the reactor running the handler
+    cannot watch the connection meanwhile.
+  - TCP does not tell a client that closed from one that only shut down its
+    write side (a half-close) and still waits for the answer. For an HTTP/1.1
+    request Facil sends one `100 Continue` interim response to find out: a
+    closed client answers it with a reset. **HTTP/1.0 and upgrade requests**
+    cannot be sent one, so for them only a reset or a server-side close
+    counts as gone; a client that sent its FIN is treated as still there.
+  - Streamed responses and event streams notice through `isopen`. See
+    [A client that goes away](../guide/handlers.md#A-client-that-goes-away).
 - **Garbage collection pauses request handling.** A collection stops every
   thread, the reactor included. See
   [Performance tuning](../guide/performance.md) for sizes and remedies.
@@ -98,31 +110,37 @@ The keyword limits are per server; see [Configuration](configuration.md).
 
 ## Static files
 
-Measured behaviour of `public_folder` and [`sendfile`](@ref):
+Behaviour of `public_folder` and [`sendfile`](@ref):
 
-- `cache-control: max-age=3600` is always sent and cannot be changed.
-- `If-None-Match` is honoured; `If-Modified-Since` is ignored.
+- `cache-control: max-age=3600` by default. `static_cache_control` changes
+  it (or drops it) for `public_folder` files; a file from `sendfile` always
+  gets `max-age=3600`.
+- `If-None-Match` and `If-Modified-Since` are honoured; when both are sent,
+  `If-None-Match` decides.
 - One byte range is served (`206`); a request for several ranges gets the
   whole file (`200`).
-- A directory path without a trailing slash is not redirected.
-- Files whose names start with a dot are served, and symbolic links are
-  followed, including links that point outside the folder.
-- The `etag` is derived from size and modification time.
+- `public_folder`: a directory with an `index.html`, asked for without its
+  trailing slash, gets a `301` to the path with the slash.
+- `public_folder`: paths with a part that starts with a dot are not served
+  by default (`dotfiles = :deny`), except under `/.well-known`. Symbolic
+  links are followed by default, including links that point outside the folder
+  (`symlinks = :inside` stops that).
+- The `etag` is derived from size and modification time, not the content.
 
 See [Static files](../guide/static.md).
 
 ## Not included
 
-- **No router**, no middleware framework, no templates, no cookie or session
-  helpers, no multipart or form parser, no CORS helper. Handlers are plain
+- **No router**, no middleware framework, no templates, no sessions or cookie
+  signing, no multipart parser, no CORS helper. Handlers are plain
   functions; the guides show how to write each of these in a few lines where
   it is short ([Routing](../guide/routing.md), [Security](../guide/security.md)).
+  Cookies and URL-encoded forms do have helpers ([Cookies](../guide/cookies.md),
+  [Query strings and forms](../guide/urls-and-forms.md)).
 - **No HTTP client.** Use `Downloads` (bundled with Julia) or HTTP.jl as a
   client.
 - **No worker processes** (`fork`, `cluster`). Scale with threads.
 - **Pub/sub is local to the process.** facil.io's Redis engine is not wrapped.
-- **The client certificate of a mutual-TLS connection is not exposed** to the
-  handler; it is only verified.
 - **Existing HTTP.jl handlers and routers do not plug in.** They need porting
   to HttpTypes; see [Coming from HTTP.jl](../guide/from-http-jl.md).
 
@@ -135,9 +153,9 @@ exceptions (2026-11-25):
 | Rows | What | Why |
 |:--|:--|:--|
 | 10, 10-sysimg, 11 | Memory, idle and with 10,000 connections | The Julia runtime: about 390 MB idle against Node's 50 MB |
-| 12, 12-sysimg, 12-json, 13, 13-sysimg, 13-json | Start-up and first request | Julia start-up and compilation: 0.88 s to first response, 0.31 s for a first request |
+| 12, 12-sysimg, 12-json, 13, 13-sysimg, 13-json | Start-up and first request | Julia start-up and compilation: 0.70 s to first response, 0.31 s for a first request |
 | 19, 19a | Building a 50 KB or 1 KB JSON response | The JSON library's serialisation, not the server |
-| 25 | 1 MB upload streamed through a task | A thread crossing per chunk; `Stream(on_chunk)` avoids it |
+| 25 | 1 MB upload streamed through a task | Julia's idle worker threads spin (100 µs each) between chunk hand-offs and use the CPU. `JULIA_THREAD_SLEEP_THRESHOLD=0` at launch gives 0.71×; `Stream(on_chunk)` avoids the hand-offs |
 | 31-p99, 31-cpu | Task handler at a light 10,000 req/s | Two thread crossings per request; `inline = true` avoids them |
 | 7-c10 | WebSocket echo of 256 KB messages, 10 connections | macOS kernel networking; to be rechecked on Linux |
 | 26 | WebSocket broadcast to 10,000 subscribers | macOS socket memory; to be rechecked on Linux |

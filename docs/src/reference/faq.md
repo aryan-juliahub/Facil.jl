@@ -190,9 +190,11 @@ Behind a reverse proxy that is the proxy's address: read the
 
 ### How do I read a query parameter or a decoded path?
 
-`query(uri(req))` is the raw query string. Parse it with
-`URIs.queryparams`; decode a path segment with `URIs.unescapeuri`. See
-[Reading requests](../guide/requests.md).
+[`query_param`](@ref)`(req, "name")` is the decoded first value of a query
+parameter, [`query_params`](@ref)`(req)` all of them in order, and
+[`decoded_path`](@ref)`(req)` the percent-decoded path (`nothing` for an
+encoded `/` or NUL, a bad escape or invalid UTF-8). `query(uri(req))` and `path(uri(req))` stay as
+the client sent them. See [Query strings and forms](../guide/urls-and-forms.md).
 
 ## HTTPS
 

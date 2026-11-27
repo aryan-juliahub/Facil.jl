@@ -4,11 +4,11 @@ This tutorial builds a small but complete web service in about ten minutes: a
 notes API with routing, path and query parameters, JSON in and out, proper
 error responses and a test. At the end you run it and call it with `curl`.
 
-You need Facil installed ([Install](install.md)) and two more packages for
-JSON and for decoding query strings:
+You need Facil installed ([Install](install.md)) and one more package for
+JSON:
 
 ```sh
-julia --project=. -e 'using Pkg; Pkg.add(["JSON", "URIs"])'
+julia --project=. -e 'using Pkg; Pkg.add("JSON")'
 ```
 
 The finished program is one file, `notes.jl`. Each section below adds a part
@@ -57,9 +57,9 @@ text. Facil does not set `content-type: application/json` for you, because a
 Main.example("tutorial_notes.jl", "list")
 ```
 
-`query(uri(req))` is the raw text after the `?`, or `nothing` when there is
-no query. Facil does not parse or percent-decode it; `URIs.queryparams` does
-both and returns a `Dict{String,String}`.
+[`query_param`](@ref)`(req, "q")` splits the query string, decodes it (`+`
+and `%20` become spaces) and returns the first value of `q`, or `default`
+when the query has none. [`query_params`](@ref) returns every pair, in order.
 
 Note the shape of the function: take the lock, copy out what you need,
 release it, and only then build the response. Hold a lock for as short a time

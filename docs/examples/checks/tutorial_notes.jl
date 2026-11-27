@@ -1,4 +1,4 @@
-# needs: JSON URIs
+# needs: JSON
 # The file serves only when run as a program, so the check starts the app itself.
 server = Facil.serve!(example.app, 0; max_body_size = 64 * 1024)
 try

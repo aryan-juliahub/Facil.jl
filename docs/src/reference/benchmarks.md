@@ -181,7 +181,7 @@ the scoreboard reports them as EXCEPTION, not FAIL, when they are under target.
 | 10, 10-sysimg, 11 | Memory, idle and with 10,000 connections | Julia runtime start-up and memory cost |
 | 12, 12-sysimg, 12-json, 13, 13-sysimg, 13-json | Start-up to first response, first request | Julia runtime start-up and first-request (compilation) cost |
 | 19, 19a | Build a 50 KB / 1 KB JSON response | Cost of Julia's JSON library serialising the body, not of the server |
-| 25 | 1 MB upload streamed through a task, per CPU-second | Task handlers pay two cross-thread hand-offs per chunk; `Stream(on_chunk)` beats Node |
+| 25 | 1 MB upload streamed through a task, per CPU-second | Task handlers pay two cross-thread hand-offs per chunk, and Julia's idle worker threads spin between them (`JULIA_THREAD_SLEEP_THRESHOLD=0` gives 0.71×); `Stream(on_chunk)` beats Node |
 | 31-p99, 31-cpu | Task handler at a light 10k req/s: p99, CPU | Two cross-thread hand-offs per request; `inline = true` beats Node |
 | 7-c10 | WebSocket echo 256 KB, 10 connections | macOS kernel networking limit (bound by `writev`); recheck on Linux |
 | 26 | WebSocket broadcast to 10,000 subscribers | macOS socket-memory exhaustion and retransmits; recheck on Linux |
@@ -250,7 +250,7 @@ row used a copy path that the package no longer uses; compare row A4 above.
 | JSON, 12 request headers | 190,426 | 123,424 | 46,884 | 4.06× |
 | 100 KB response | 51,370 | 83,447 | 38,381 | 1.34× |
 
-Requests per second, median of 3 runs [4].
+Requests per second, median of 3 runs [5].
 
 ## Reproducing
 
@@ -279,4 +279,4 @@ and what changed since 25 November.
 2. `bench/scoreboard/results/20261126-234001/table.md`: rerun of A6, A7, A14, A15c, A17, A19d, 7-c100, 12, 12-sysimg, 12-json, 13-sysimg, 13-json, 21b, 21b-p99, 21c, 22, 23a, 23b, 25, 26, 29, 32 (same settings)
 3. `bench/scoreboard/results/20261127-000804/table.md`: rows 19, 19a, 21a–22, 25, 32 with `JULIA_NUM_GC_THREADS=1`
 4. `bench/scoreboard/results/20261127-064501/table.md`: rows 12, 12-sysimg, 12-json after the `serve!` start-up fix (same settings, sysimage rebuilt)
-4. Validation run, not in the repository: `v3_speed/results/table.txt` in the planning session's scratch directory (rows `tiny`, `json`, `json12h`, `large`, client `c100w4`; Facil column `facil-c`).
+5. Validation run, not in the repository: `v3_speed/results/table.txt` in the planning session's scratch directory (rows `tiny`, `json`, `json12h`, `large`, client `c100w4`; Facil column `facil-c`).

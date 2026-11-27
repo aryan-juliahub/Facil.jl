@@ -57,7 +57,9 @@ port `0` picks a free port (`port(server)` tells which).
 | Also valid outputs | what `stream`, `sse`, `sendfile` and `websocket` return |
 | Throwing, or returning anything else | 500; logged to stderr once per error type and call site every 10 s |
 | Routing | none built in: branch on `method(req)` and `path(uri(req))` |
-| Query string | `query(uri(req))` is raw text or `nothing`; nothing is percent-decoded (use URIs.jl) |
+| Query string, path | `query(uri(req))` and `path(uri(req))` are raw. `query_param(req, "q"; default)`, `query_params(req)` and `decoded_path(req)` decode them; `parse_form(req)` reads a URL-encoded body |
+| Cookies | `cookies(req)` is a `Dict`; `set_cookie!(res, name, value; ...)`, `delete_cookie!(res, name)` |
+| Client | `client_address(req)` is `(ip, port)`; `client_certificate(req)` the mutual-TLS PEM or `nothing` |
 | Headers Facil sets | `content-length` always; `content-type` when a non-empty body has none (`text/plain; charset=utf-8` for strings, `application/octet-stream` for bytes) |
 
 ```julia
@@ -94,7 +96,7 @@ server = serve!(app, "127.0.0.1", 8080)
 | WebSocket | `Facil.is_upgrade(req)` then `websocket(req; on_open, on_message, on_close)` | Callbacks run on the reactor and must not block; `spawn = true` moves them to tasks. `send(ws, msg)` from any thread. |
 | Fan-out to WebSocket clients | `subscribe(ws, channel)`, `publish(channel, msg)` | No Julia code runs per message. Process-local. |
 | HTTPS | `tls = TLSConfig(cert, key; ...)` | Paths or PEM text, checked at construction. `reload!(server; cert, key)` rotates certificates live. |
-| Static files | `public_folder = dir`, or `sendfile(path)` from a handler | ETag, `last-modified`, conditional and single-range requests, `.gz` siblings. `dotfiles = :deny` and `symlinks = :inside` restrict what `public_folder` serves. |
+| Static files | `public_folder = dir`, or `sendfile(path)` from a handler | ETag, `last-modified`, conditional (`If-None-Match`, `If-Modified-Since`) and single-range requests, `.gz` siblings. `public_folder` denies dotfiles by default (`dotfiles = :serve` to allow; `.well-known` always served), redirects `/dir` to `/dir/`, and takes `static_cache_control` (default `max-age=3600`). `symlinks = :inside` keeps it in the folder. |
 | Compression | `compress = true` or `CompressOptions(...)` | zstd, brotli or gzip by `Accept-Encoding`; skips bodies under 1 KiB and non-text types. |
 | Short waits, timers | `Facil.sleep(s)`, `every(f, ms)`, `Facil.Timer(cb, delay; interval)` | Timed by a C timer thread. |
 | Shutdown | `close(server; grace = seconds)`, then `wait(server)` | Stops accepting, lets requests finish, sends WebSockets a `1001` close. `serve` does this on SIGTERM with `shutdown_grace` (10 s). |
@@ -124,9 +126,10 @@ keyword throws an `ArgumentError` that names the closest valid one.
 - **Start Julia with threads.** Without `-t N`, task handlers silently become
   inline handlers (`verbose = true` prints a note).
 - **Set `content-type` for JSON yourself;** a `String` body defaults to `text/plain`.
-- **A client that disconnects is not noticed** while its handler runs; there is
-  no cancellation. In `stream` and `sse`, check `isopen`.
-- **HTTP/1.1 only.** No HTTP/2, no router, no HTTP client, no cookie helpers, no
+- **A handler is not cancelled when its client disconnects.** In a task
+  handler, check `isconnected(req)` or register `on_disconnect(f, req)`; an
+  inline handler cannot tell. In `stream` and `sse`, check `isopen`.
+- **HTTP/1.1 only.** No HTTP/2, no router, no HTTP client, no sessions, no
   worker processes. A `Host` header is required (400 without it).
 - **HTTP.jl handlers do not port unchanged;** see
   [`docs/src/guide/from-http-jl.md`](docs/src/guide/from-http-jl.md).
@@ -136,7 +139,7 @@ keyword throws an `ArgumentError` that names the closest valid one.
 | Topic | File |
 |---|---|
 | Install, first server, tutorial | [`docs/src/getting-started/`](docs/src/getting-started/) |
-| One page per feature, each with a tested example | [`docs/src/guide/`](docs/src/guide/) (`handlers`, `requests`, `responses`, `bodies`, `routing`, `json`, `streaming`, `sse`, `websockets`, `pubsub`, `tls`, `static`, `compression`, `timers`, `errors`, `shutdown`, `security`, `performance`, `testing`, `deployment`, `from-http-jl`, `from-node`) |
+| One page per feature, each with a tested example | [`docs/src/guide/`](docs/src/guide/) (`handlers`, `requests`, `urls-and-forms`, `cookies`, `responses`, `bodies`, `routing`, `json`, `streaming`, `sse`, `websockets`, `pubsub`, `tls`, `static`, `compression`, `timers`, `errors`, `shutdown`, `security`, `performance`, `testing`, `deployment`, `from-http-jl`, `from-node`) |
 | HttpTypes names, Rust to Julia | [`docs/src/api/httptypes/`](docs/src/api/httptypes/index.md) |
 | Limits and what is not included | [`docs/src/reference/limits.md`](docs/src/reference/limits.md) |
 | Every keyword and its default | [`docs/src/reference/configuration.md`](docs/src/reference/configuration.md) |
@@ -155,10 +158,13 @@ keyword throws an `ArgumentError` that names the closest valid one.
 | `src/Facil.jl` | Module, exports, `__init__` order. One file per feature beside it. |
 | `src/libfjl.jl` | Finds and loads the C library, ABI check, `@gcsafe_ccall`, C struct mirrors. |
 | `src/reactor.jl`, `server.jl`, `async.jl` | Reactor lifecycle; `serve!` and the request callback; the task-handler worker pool. |
+| `src/request.jl`, `response.jl` | Building a `Request` from C (header tables) and its connection: `client_address`, `client_certificate`, `isconnected`, `on_disconnect`. Pinned response bodies. |
 | `src/body.jl`, `streaming.jl`, `sse.jl`, `websockets.jl`, `pubsub.jl`, `tls.jl`, `static.jl`, `compress.jl`, `timers.jl`, `signals.jl` | The features named. |
+| `src/url.jl`, `cookies.jl` | Query, path and form decoding (`query_param`, `decoded_path`, `parse_form`, `percent_decode`); cookie parsing and `set_cookie!`. Pure Julia. |
+| `src/precompile.jl` | PrecompileTools workload, including `serve!`'s keyword path. |
 | `deps/facil.io` | facil.io at commit `51287473`, unpacked by `deps/fetch_facil.sh`. Not in git (ignored). Never edited. |
-| `deps/patches/` | 22 patches, applied in the order of `series` by `apply.sh` to a copy. `README.md` has one row per patch. |
-| `deps/shim/` | `fjl_*.c/h`: the C layer Julia calls (`fjl.h` holds `FJL_ABI`). |
+| `deps/patches/` | 24 patches, applied in the order of `series` by `apply.sh` to a copy. `README.md` has one row per patch. |
+| `deps/shim/` | `fjl_*.c/h`: the C layer Julia calls (`fjl.h` holds `FJL_ABI`, currently 3). `fjl_async.c` also watches connections for `isconnected`. |
 | `deps/build_local.jl` | Builds `deps/usr/lib/libfacil_julia.{dylib,so}` from the patched copy plus the shim. `src/libfjl.jl` includes it and runs it when Facil is precompiled. |
 | `deps/build_tarballs.jl`, `deps/yggdrasil/` | Packaging for a future `facil_julia_jll`. |
 | `lib/HttpTypes/` | Separate package with its own `Project.toml` and tests. No dependencies; runs on Windows too. |

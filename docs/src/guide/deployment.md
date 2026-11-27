@@ -172,8 +172,8 @@ request to each route waits for compilation. Measured on the
 
 | | Plain `julia` | With a system image |
 |:--|:--|:--|
-| Process start to first response | 764 ms | 314 ms |
-| First request, once the server is up | 318 ms | 6.9 ms |
+| Process start to first response | 701 ms | 264 ms |
+| First request, once the server is up | 310 ms | 5.2 ms |
 
 Later requests are not affected. Three things help, in order of effort.
 
