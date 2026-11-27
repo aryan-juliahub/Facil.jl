@@ -161,8 +161,10 @@ other stalls.
 - The default (`Buffer()`) is the fastest way to receive a body that fits in
   memory: 1 MB uploads run at 11,904 req/s against Node's 9,644 (row A12c).
 - Reading a streamed body in a task handler (`Stream()` with
-  [`body_chunks`](@ref)) pays a thread crossing per chunk: 8,484 requests per
-  CPU-second against Node's 11,433 (row 25). When the work per chunk does not
+  [`body_chunks`](@ref)) pays a thread crossing per chunk: 2,431 requests per
+  CPU-second against Node's 11,585 (row 25). Most of that CPU is Julia's idle
+  worker threads spinning between chunks; starting Julia with
+  `JULIA_THREAD_SLEEP_THRESHOLD=0` gives 8,832. When the work per chunk does not
   block (hashing, counting, appending to a buffer), use
   [`Stream`](@ref)`(on_chunk)`, which runs on the reactor without a crossing.
 

@@ -111,16 +111,16 @@
 <g><title>32 Longest single pause at 10k req/s, no garbage: 0.16× (EXCEPTION)</title><rect x="755.00" y="190.25" width="5.50" height="75.88" rx="1.5" fill="#a8a8a8"/></g>
 <g><title>10-sysimg Memory, idle (Facil: PackageCompiler sysimage, /json-only server): 0.15× (EXCEPTION)</title><rect x="762.50" y="190.25" width="5.50" height="78.08" rx="1.5" fill="#a8a8a8"/></g>
 <g><title>10 Memory, idle: 0.13× (EXCEPTION)</title><rect x="770.00" y="190.25" width="5.50" height="84.05" rx="1.5" fill="#a8a8a8"/></g>
-<g><title>12-sysimg Start-up to first response (Facil: PackageCompiler sysimage, /json-only server): 0.074× (EXCEPTION)</title><rect x="777.50" y="190.25" width="5.50" height="108.10" rx="1.5" fill="#a8a8a8"/></g>
-<g><title>21a-p999 100 KB garbage per request at 10k req/s: p99.9: 0.055× (EXCEPTION)</title><rect x="785.00" y="190.25" width="5.50" height="120.48" rx="1.5" fill="#a8a8a8"/></g>
-<g><title>12-json Start-up to first response (Facil: plain julia, /json-only server): 0.052× (EXCEPTION)</title><rect x="792.50" y="190.25" width="5.50" height="122.81" rx="1.5" fill="#a8a8a8"/></g>
-<g><title>12 Start-up to first response: 0.033× (EXCEPTION)</title><rect x="800.00" y="190.25" width="5.50" height="141.16" rx="1.5" fill="#a8a8a8"/></g>
+<g><title>12-sysimg Start-up to first response (Facil: PackageCompiler sysimage, /json-only server): 0.10× (EXCEPTION)</title><rect x="777.50" y="190.25" width="5.50" height="94.80" rx="1.5" fill="#a8a8a8"/></g>
+<g><title>12-json Start-up to first response (Facil: plain julia, /json-only server): 0.063× (EXCEPTION)</title><rect x="785.00" y="190.25" width="5.50" height="114.72" rx="1.5" fill="#a8a8a8"/></g>
+<g><title>21a-p999 100 KB garbage per request at 10k req/s: p99.9: 0.055× (EXCEPTION)</title><rect x="792.50" y="190.25" width="5.50" height="120.48" rx="1.5" fill="#a8a8a8"/></g>
+<g><title>12 Start-up to first response: 0.038× (EXCEPTION)</title><rect x="800.00" y="190.25" width="5.50" height="135.27" rx="1.5" fill="#a8a8a8"/></g>
 <g><title>13 First request: 0.0068× (EXCEPTION)</title><rect x="807.50" y="190.25" width="5.50" height="206.96" rx="1.5" fill="#a8a8a8"/></g>
 <line x1="64" y1="190.2" x2="814" y2="190.2" stroke="#191919" stroke-width="1.5"/>
 <text x="56" y="194.2" font-size="11.5" font-weight="600" text-anchor="end" fill="#191919">1.0×</text>
 <text x="73.8" y="110.2" font-size="12" text-anchor="start" fill="#666666">A25a float-sum handler 5.68×</text>
 <text x="804.2" y="413.2" font-size="12" text-anchor="end" fill="#666666">13 first request (compile) 0.0068×</text>
-<text x="796.8" y="347.4" font-size="12" text-anchor="end" fill="#666666">12 start-up 0.033×</text>
+<text x="796.8" y="341.5" font-size="12" text-anchor="end" fill="#666666">12 start-up 0.038×</text>
 <text x="598.0" y="180.2" font-size="12" text-anchor="end" fill="#666666">72 rows at or above 1.0×</text>
 <line x1="656.5" y1="198.2" x2="656.5" y2="234.2" stroke="#666666" stroke-width="1"/>
 <text x="652.5" y="248.2" font-size="12" text-anchor="end" fill="#666666">9 fails: 5 within 5% of Node, the worst 0.59×</text>

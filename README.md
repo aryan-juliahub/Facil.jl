@@ -162,7 +162,7 @@ cell on a machine checked idle before each run, Facil servers with
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/src/assets/bench-ratio-dark.svg">
-  <img alt="Facil ÷ Node ratio for all 100 scoreboard rows, sorted, log scale: 72 rows at or above 1.0×, 9 failing rows (5 within 5% of Node, the worst 0.59×), and 19 approved exceptions, the lowest being start-up (0.033×) and first request (0.0068×)." src="docs/src/assets/bench-ratio-light.svg" width="830">
+  <img alt="Facil ÷ Node ratio for all 100 scoreboard rows, sorted, log scale: 72 rows at or above 1.0×, 9 failing rows (5 within 5% of Node, the worst 0.59×), and 19 approved exceptions, the lowest being start-up (0.038×) and first request (0.0068×)." src="docs/src/assets/bench-ratio-light.svg" width="830">
 </picture>
 
 **72 pass, 9 fail, 19 approved exceptions.** Five failing rows are within 5% of
@@ -191,15 +191,17 @@ Known limits below.
 | 21c p99.9 at 10k req/s, 10 KB garbage per request (ms, lower is better) | 0.274 | 0.161 | 0.59× | FAIL |
 | 19a Build a 1 KB JSON response | 67,053 | 127,284 | 0.53× | EXCEPTION |
 | 25 1 MB upload streamed through a task (requests per CPU-second) | 2,431 | 11,585 | 0.21× | EXCEPTION |
-| 12 Start-up to first response (ms, lower is better) | 881 | 29.3 | 0.033× | EXCEPTION |
+| 12 Start-up to first response (ms, lower is better) | 701 | 26.9 | 0.038× | EXCEPTION |
 | 10 Memory, idle (MB, lower is better) | 387 | 51.0 | 0.13× | EXCEPTION |
 
 Requests per second (median of 3 runs) unless noted. Numbers come from the full
 run of 26 November 2026, with a rerun (both sides, 3 runs) replacing every row
 whose verdict differed from the previous published numbers, plus A17, 25, 32
-and the start-up rows. Row 25 fell from 0.74× to 0.21× since 25 November: the
-server now spends about 3.5 times the CPU per upload; the cause is not yet
-traced.
+and the start-up rows; the start-up rows come from a run on 27 November after
+a start-up fix. Row 25 fell from 0.74× to 0.21× since 25 November
+because the 25 November code set Julia's idle-thread spin to zero, which Facil
+no longer does: the worker threads now spin between chunks. Starting Julia with
+`JULIA_THREAD_SLEEP_THRESHOLD=0` gives 8,832 requests per CPU-second (0.71×).
 
 On Apple silicon Julia 1.12 and 1.13 can crash in GC marking with more than one
 GC thread, so the [deployment guide](docs/src/guide/deployment.md) recommends

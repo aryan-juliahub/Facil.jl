@@ -12,7 +12,7 @@ row is at least 1.0× Node.
 
 ![Dumbbell chart of requests per second for Facil.jl and Node.js on 23 scoreboard rows, log scale. Facil is ahead on 20 rows, from 1.01× to 1.77×, and behind on building a 1 KB JSON response (0.53×, approved exception) and 256 KB WebSocket echo with 10 connections (0.98×, approved exception) and 100 connections (0.997×).](../assets/bench-throughput-light.svg)
 
-![Facil ÷ Node ratio for all 100 scoreboard rows, sorted, log scale: 72 rows at or above 1.0×, 9 failing rows (5 within 5% of Node, the worst 0.59×), and 19 approved exceptions, the lowest being start-up (0.033×) and first request (0.0068×).](../assets/bench-ratio-light.svg)
+![Facil ÷ Node ratio for all 100 scoreboard rows, sorted, log scale: 72 rows at or above 1.0×, 9 failing rows (5 within 5% of Node, the worst 0.59×), and 19 approved exceptions, the lowest being start-up (0.038×) and first request (0.0068×).](../assets/bench-ratio-light.svg)
 
 The charts are drawn by `python3 bench/scoreboard/chart.py` from
 `bench/scoreboard/chart_data.csv` (light and dark variants in
@@ -38,8 +38,9 @@ The charts are drawn by `python3 bench/scoreboard/chart.py` from
 
 Each row comes from the full run of 26 November 2026 [1], except rows that a
 rerun re-measured on both sides [2]: every row whose verdict differed from the
-numbers published on 25 November, plus A17, 25, 32 and the start-up rows. The
-Run column names the source. No Facil server crashed in either run.
+numbers published on 25 November, plus A17, 25, 32 and the start-up rows. Rows
+12, 12-sysimg and 12-json come from a run after the start-up fix of 27 November
+[4]. The Run column names the source. No Facil server crashed in any run.
 
 ## Scoreboard
 
@@ -111,9 +112,9 @@ Run column names the source. No Facil server crashed in either run.
 | 10 | Memory, idle | rss_mb (↓) | 387 (387–390) | 51 (50.8–51.1) | node:http | 0.13× | EXCEPTION |  | [1] |
 | 10-sysimg | Memory, idle (Facil: PackageCompiler sysimage, /json-only server) | rss_mb (↓) | 335 (335–335) | 51 (50.8–51.1) | node:http | 0.15× | EXCEPTION |  | [1] |
 | 11 | Memory, 10,000 keep-alive connections under load | rss_max_mb (↓) | 433 (418–440) | 248 (230–289) | node:http | 0.57× | EXCEPTION | facil:errors | [1] |
-| 12 | Start-up to first response | startup_ms (↓) | 881 (879–883) | 29.3 (29.1–31.2) | node:http | 0.033× | EXCEPTION |  | [2] |
-| 12-sysimg | Start-up to first response (Facil: PackageCompiler sysimage, /json-only server) | startup_ms (↓) | 397 (395–427) | 29.3 (29.1–31.2) | node:http | 0.074× | EXCEPTION |  | [2] |
-| 12-json | Start-up to first response (Facil: plain julia, /json-only server) | startup_ms (↓) | 566 (555–583) | 29.3 (29.1–31.2) | node:http | 0.052× | EXCEPTION |  | [2] |
+| 12 | Start-up to first response | startup_ms (↓) | 701 (695–706) | 26.9 (26.4–28.2) | node:http | 0.038× | EXCEPTION |  | [4] |
+| 12-sysimg | Start-up to first response (Facil: PackageCompiler sysimage, /json-only server) | startup_ms (↓) | 264 (264–333) | 26.9 (26.4–28.2) | node:http | 0.10× | EXCEPTION |  | [4] |
+| 12-json | Start-up to first response (Facil: plain julia, /json-only server) | startup_ms (↓) | 427 (415–430) | 26.9 (26.4–28.2) | node:http | 0.063× | EXCEPTION |  | [4] |
 | 13 | First request | first_req_ms (↓) | 310 (310–316) | 2.11 (2.05–2.14) | node:http | 0.0068× | EXCEPTION |  | [1] |
 | 13-sysimg | First request (Facil: PackageCompiler sysimage, /json-only server) | first_req_ms (↓) | 5.2 (4.93–5.3) | 2.1 (2.09–2.13) | node:http | 0.40× | EXCEPTION |  | [2] |
 | 13-json | First request (Facil: plain julia, /json-only server) | first_req_ms (↓) | 5.11 (4.99–5.61) | 2.1 (2.09–2.13) | node:http | 0.41× | EXCEPTION |  | [2] |
@@ -197,10 +198,16 @@ The scoreboard starts every Facil server with `JULIA_NUM_GC_THREADS=4`
   deliveries/s the row offers in both runs; uWebSockets.js ranged from 438k to
   1M, so the 1.30× mostly reflects Node's variance.
 - Row 25 fell from 0.74× to 0.21× since 25 November: at the same request rate
-  the Facil server now uses about 4.6 cores where it used 1.6. One GC thread
-  gives the same number. The cause is not yet traced.
-- Start-up (12, 12-sysimg, 12-json) is 15–26% slower than on 25 November in both
-  runs; not investigated.
+  the Facil server uses about 4.6 cores where it used 1.6. The 25 November
+  number came from code that set Julia's idle-thread spin to zero for
+  task-handler servers, removed before the first release commit. With Julia's
+  default spin (100 µs) the worker threads spin between chunk hand-offs and
+  rarely sleep. Starting Julia with `JULIA_THREAD_SLEEP_THRESHOLD=0` gives
+  8,832 requests per CPU-second (0.71×; Facil side only, 27 November).
+- Start-up (12, 12-sysimg, 12-json) was 15–26% slower on 26 November than on
+  25 November: `serve!` compiled its keyword handling for each script's handler
+  and keyword types at the first call (about 230 ms). It now passes the
+  keywords to precompiled code; run [4] measured 701, 264 and 427 ms.
 - Row 20 runs a task-handler server on one Julia thread. With one thread Facil
   runs handlers inline, so this row measures inline handlers.
 
@@ -271,4 +278,5 @@ and what changed since 25 November.
 1. `bench/scoreboard/results/20261126-212620/table.md`: full run, all rows (runs per cell: 3; sides: both; machine: 15 cores; node v22.23.2; facil env: `JULIA_NUM_GC_THREADS=4`)
 2. `bench/scoreboard/results/20261126-234001/table.md`: rerun of A6, A7, A14, A15c, A17, A19d, 7-c100, 12, 12-sysimg, 12-json, 13-sysimg, 13-json, 21b, 21b-p99, 21c, 22, 23a, 23b, 25, 26, 29, 32 (same settings)
 3. `bench/scoreboard/results/20261127-000804/table.md`: rows 19, 19a, 21a–22, 25, 32 with `JULIA_NUM_GC_THREADS=1`
+4. `bench/scoreboard/results/20261127-064501/table.md`: rows 12, 12-sysimg, 12-json after the `serve!` start-up fix (same settings, sysimage rebuilt)
 4. Validation run, not in the repository: `v3_speed/results/table.txt` in the planning session's scratch directory (rows `tiny`, `json`, `json12h`, `large`, client `c100w4`; Facil column `facil-c`).

@@ -15,6 +15,9 @@ Sources:
    numbers (A6, A7, A14, A15c, A19d, 7-c100, 21b-p99, 21c, 22, 23a, 23b, 26, 29), plus A17, 25, 32 and the
    start-up rows, which moved most. Where a row is in both, [2] is used.
 3. `20261127-000804`: the GC-sensitive rows with `JULIA_NUM_GC_THREADS=1`, both sides (not used in the totals).
+4. `20261127-064501`: the start-up rows 12, 12-sysimg and 12-json, both sides, 3 runs, after `serve!` moved its
+   keyword handling into precompiled code (sysimage rebuilt). The same rows on `ea172cc` that morning, Facil side:
+   868, 411, 571 ms (`20261127-064547`).
 
 Machine: Apple M5 Pro, 15 cores, macOS, on AC power, Spotlight indexing off, no sleep during the runs (checked
 with `pmset -g log`). Julia 1.13.0, Node v22.23.2. No Facil server crashed in any run.
@@ -87,9 +90,9 @@ with `pmset -g log`). Julia 1.13.0, Node v22.23.2. No Facil server crashed in an
 | 10 | Memory, idle | rss_mb (↓) | 387 (387–390) | 51 (50.8–51.1) | node:http | 0.13× | EXCEPTION |  | [1] |
 | 10-sysimg | Memory, idle (Facil: PackageCompiler sysimage, /json-only server) | rss_mb (↓) | 335 (335–335) | 51 (50.8–51.1) | node:http | 0.15× | EXCEPTION |  | [1] |
 | 11 | Memory, 10,000 keep-alive connections under load | rss_max_mb (↓) | 433 (418–440) | 248 (230–289) | node:http | 0.57× | EXCEPTION | facil:errors | [1] |
-| 12 | Start-up to first response | startup_ms (↓) | 881 (879–883) | 29.3 (29.1–31.2) | node:http | 0.033× | EXCEPTION |  | [2] |
-| 12-sysimg | Start-up to first response (Facil: PackageCompiler sysimage, /json-only server) | startup_ms (↓) | 397 (395–427) | 29.3 (29.1–31.2) | node:http | 0.074× | EXCEPTION |  | [2] |
-| 12-json | Start-up to first response (Facil: plain julia, /json-only server) | startup_ms (↓) | 566 (555–583) | 29.3 (29.1–31.2) | node:http | 0.052× | EXCEPTION |  | [2] |
+| 12 | Start-up to first response | startup_ms (↓) | 701 (695–706) | 26.9 (26.4–28.2) | node:http | 0.038× | EXCEPTION |  | [4] |
+| 12-sysimg | Start-up to first response (Facil: PackageCompiler sysimage, /json-only server) | startup_ms (↓) | 264 (264–333) | 26.9 (26.4–28.2) | node:http | 0.10× | EXCEPTION |  | [4] |
+| 12-json | Start-up to first response (Facil: plain julia, /json-only server) | startup_ms (↓) | 427 (415–430) | 26.9 (26.4–28.2) | node:http | 0.063× | EXCEPTION |  | [4] |
 | 13 | First request | first_req_ms (↓) | 310 (310–316) | 2.11 (2.05–2.14) | node:http | 0.0068× | EXCEPTION |  | [1] |
 | 13-sysimg | First request (Facil: PackageCompiler sysimage, /json-only server) | first_req_ms (↓) | 5.2 (4.93–5.3) | 2.1 (2.09–2.13) | node:http | 0.40× | EXCEPTION |  | [2] |
 | 13-json | First request (Facil: plain julia, /json-only server) | first_req_ms (↓) | 5.11 (4.99–5.61) | 2.1 (2.09–2.13) | node:http | 0.41× | EXCEPTION |  | [2] |
@@ -142,10 +145,10 @@ Every row whose verdict changed or whose ratio moved more than 5%, published num
 | 23a | 33,981 / 33,334 = 1.02× PASS | 34,188 / 35,183 = 0.97× FAIL | −5% | Node +6% | 0.97× in both new runs, errors flagged on both sides; parity-level |
 | 23b | 34,365 / 34,562 = 0.99× FAIL | 35,644 / 34,900 = 1.02× PASS | +3% | Facil +4% | 1.02× in both new runs; parity-level |
 | 29 | 6,541 / 6,556 = 0.998× FAIL | 6,367 / 6,343 = 1.00× PASS | +1% | both −3% | 1.01× and 1.00×; client-bound on both sides, parity |
-| 25 | 8,484 / 11,433 = 0.74× EXCEPTION | 2,431 / 11,585 = 0.21× EXCEPTION | −72% | Facil −71% | Real: at the same request rate the Facil server now uses about 4.6 cores (1.56 before). Same with one GC thread, and the same at the first commit of this repository, so the cause is older than the history here or in the environment; not traced |
+| 25 | 8,484 / 11,433 = 0.74× EXCEPTION | 2,431 / 11,585 = 0.21× EXCEPTION | −72% | Facil −71% | Not a regression in the repository: the 25 Nov number came from a working tree that set Julia's idle-thread spin (`JULIA_THREAD_SLEEP_THRESHOLD`) to 0 for task-handler servers, removed before the first commit. With Julia's default 100 µs spin the four worker threads spin between chunk hand-offs (4.6 cores against 1.56). `JULIA_THREAD_SLEEP_THRESHOLD=0` at launch gives 8,832 req/CPU-s (27 Nov, Facil side only) |
 | 26 | 200,091 / 213,212 = 0.94× EXCEPTION | 192,679 / 228,400 = 0.84× EXCEPTION | −10% | Node +7% | 1.04× in the full run, 0.84× in the rerun; spreads of 160k–235k on both sides. Noise |
 | 32 | 4.67 / 3.96 = 0.85× EXCEPTION | 2.61 / 0.419 = 0.16× EXCEPTION | −81% | Facil −44%, Node −89% | Facil's longest pause shorter; Node's published number was a slow run |
-| 12, 12-sysimg, 12-json | 764, 314, 448 ms | 881, 397, 566 ms | −7 to −15% | Facil +15–26% | Start-up slower in both new runs; not investigated |
+| 12, 12-sysimg, 12-json | 764, 314, 448 ms | 881, 397, 566 ms | −7 to −15% | Facil +15–26% | `serve!` compiled its keyword body for each script's handler and keyword types (about 230 ms, 110 ms before); it now hands the keywords to precompiled code. 27 Nov [4]: 701, 264, 427 ms |
 | 13-sysimg | 6.92 ms | 5.20 ms | +36% | Facil −25% | First request faster with the sysimage |
 | A17 | 234,442 / 111,387 = 2.10× | 170,352 / 115,816 = 1.47× | −30% | Facil −27% | Facil's runs spread 88,516–424,968 with errors; the median is not stable |
 | A10 | 1.37× | 1.61× | +18% | Facil −11% CPU/request | Better |
