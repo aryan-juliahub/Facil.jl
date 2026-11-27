@@ -54,6 +54,9 @@ sample_text(req) = string(method(req), " ", path(uri(req)))
                     @ccall LIBFJL.fjl_http_fake_free(h::Ptr{Cvoid})::Cvoid
                 end
             end
+            precompile(check_keywords, (Any,))
+            precompile(compress_options, (Bool,))
+            precompile(start_server, (Any, String, Int, Dict{Symbol,Any}))
             precompile(on_resume, (Ptr{Cvoid}, UInt64))
             precompile(on_drop, (UInt64,))
             precompile(run_handler, (Server, Request{String}, Ptr{Cvoid}, UInt64))

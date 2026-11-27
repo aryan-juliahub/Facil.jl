@@ -18,14 +18,22 @@ mutable struct ServerOptions
     const shutdown_grace::Float64
 end
 
-function ServerOptions(; inline::Bool = false, reactors::Integer = 1,
-                       max_header_size::Integer = 32 * 1024,
-                       max_body_size::Integer = 50 * 1024 * 1024,
-                       timeout::Integer = 40, verbose::Bool = false,
-                       body_in_memory::Integer = 16 * 1024 * 1024, before_body = default_before_body,
-                       header_timeout::Integer = 30, max_pending_output::Integer = 16 * 1024 * 1024,
-                       shutdown_grace::Real = 10)
+ServerOptions(; kw...) = (check_keywords(kw); server_options(Dict{Symbol,Any}(kw)))
+
+# Reads the options from `serve!`'s keywords; the other keywords are ignored here.
+function server_options(kw::Dict{Symbol,Any})
+    verbose = get(kw, :verbose, false)::Bool
+    inline = get(kw, :inline, false)::Bool
     inline = inline || run_inline_anyway(verbose)
+    reactors = get(kw, :reactors, 1)::Integer
+    max_header_size = get(kw, :max_header_size, 32 * 1024)::Integer
+    max_body_size = get(kw, :max_body_size, 50 * 1024 * 1024)::Integer
+    timeout = get(kw, :timeout, 40)::Integer
+    body_in_memory = get(kw, :body_in_memory, 16 * 1024 * 1024)::Integer
+    before_body = get(kw, :before_body, default_before_body)
+    header_timeout = get(kw, :header_timeout, 30)::Integer
+    max_pending_output = get(kw, :max_pending_output, 16 * 1024 * 1024)::Integer
+    shutdown_grace = get(kw, :shutdown_grace, 10)::Real
     reactors >= 1 || throw(ArgumentError("reactors must be at least 1"))
     max_header_size >= 1024 || throw(ArgumentError("max_header_size must be at least 1024 bytes"))
     max_body_size >= 0 || throw(ArgumentError("max_body_size must not be negative"))
@@ -55,7 +63,7 @@ function edit_distance(a::AbstractString, b::AbstractString)
 end
 
 # Throws for a keyword that `serve!` does not take, naming the closest one.
-function check_keywords(kw)
+function check_keywords(@nospecialize(kw))
     for k in keys(kw)
         k in SERVE_KEYWORDS && continue
         name = string(k)
@@ -490,18 +498,26 @@ See also [`serve`](@ref), [`Server`](@ref), and the
 """
 serve!(handler, port::Integer; kw...) = serve!(handler, "127.0.0.1", port; kw...)
 
-function serve!(handler, host::AbstractString = "127.0.0.1", port::Integer = 8080; tls = nothing,
-                public_folder::Union{Nothing,AbstractString} = nothing, dotfiles::Symbol = :serve,
-                symlinks::Symbol = :follow, compress = false, gc_headroom::Integer = 0, kw...)
+function serve!(handler, host::AbstractString = "127.0.0.1", port::Integer = 8080; kw...)
     check_keywords(kw)
-    opts = ServerOptions(; kw...)
+    start_server(handler, String(host), 0 <= port <= 65535 ? Int(port) : -1, Dict{Symbol,Any}(kw))
+end
+
+# The work of `serve!`, compiled once in the package image instead of for every
+# handler and keyword combination a script passes.
+function start_server(@nospecialize(handler), h::String, port::Int, kw::Dict{Symbol,Any})
+    public_folder = get(kw, :public_folder, nothing)::Union{Nothing,AbstractString}
+    dotfiles = get(kw, :dotfiles, :serve)::Symbol
+    symlinks = get(kw, :symlinks, :follow)::Symbol
+    gc_headroom = get(kw, :gc_headroom, 0)::Integer
+    tls = get(kw, :tls, nothing)
+    opts = server_options(kw)
     gc_headroom > 0 && gc_headroom!(gc_headroom)
-    handler = wrap_handler(handler, compress_options(compress))
+    handler = wrap_handler(handler, compress_options(get(kw, :compress, false)))
     folder = static_folder(public_folder, symlinks)
     folder_flags = static_flags(public_folder, dotfiles, symlinks)
     tls === nothing || check_tls_options(tls, opts)
     0 <= port <= 65535 || throw(ArgumentError("port must be in 0:65535"))
-    h = String(host)
     occursin('\0', h) && throw(ArgumentError("host must not contain NUL"))
     ensure_reactor(; threads = opts.reactors)
     n = fjl_reactor_threads()
@@ -510,7 +526,7 @@ function serve!(handler, host::AbstractString = "127.0.0.1", port::Integer = 808
     for _ in 1:attempts
         p = port == 0 ? Int(@ccall LIBFJL.fjl_http_free_port(h::Cstring)::Cint) : Int(port)
         p == 0 && error("Facil: no free port on $(repr(h))")
-        srv = Server{typeof(handler)}(handler, h, p, opts, C_NULL, OPEN, Base.Event())
+        srv::Server = Server{typeof(handler)}(handler, h, p, opts, C_NULL, OPEN, Base.Event())
         key = pointer_from_objref(srv)
         ctls = tls === nothing ? C_NULL : tls_object(tls)
         lo = ListenOptions(ON_REQUEST[]; on_upgrade = ON_UPGRADE[], on_finish = ON_CLOSED[], udata = key,

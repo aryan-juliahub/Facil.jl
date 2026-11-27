@@ -47,7 +47,12 @@ First version. Nothing has been released or registered yet.
   new array per chunk.
 - Removed the idle-thread spin override: Facil no longer reads Julia's symbol
   table or changes Julia runtime variables. For light-load handlers use
-  `inline = true`, and for streamed uploads `Stream(on_chunk)`.
+  `inline = true`, and for streamed uploads `Stream(on_chunk)`; or start Julia
+  with `JULIA_THREAD_SLEEP_THRESHOLD=0` (row 25: 2.5k to 8.8k requests per
+  CPU-second).
+- `serve!` hands its keywords to code compiled in the package image, so a
+  script's first `serve!` call compiles about 60 ms instead of 230 ms
+  (start-up row 12: 868 to 701 ms).
 
 - Fixes and behaviour changes after the first documentation pass:
   - Every status from 100 to 999 is sent with its own number. Before, `418`,
