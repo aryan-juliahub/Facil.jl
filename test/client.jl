@@ -22,6 +22,12 @@ const CERTS = joinpath(@__DIR__, "certs")
 cert(name) = joinpath(CERTS, name * "_cert.pem")
 key(name) = joinpath(CERTS, name * "_key.pem")
 curl(args...) = read(ignorestatus(`curl -s --max-time 10 $args`), String)
+# The body and the client's local port, which curl reports after it.
+function curl_port(args...)
+    out = curl("-w", "\n%{local_port}", args...)
+    i = findlast('\n', out)
+    out[1:prevind(out, i)], parse(Int, out[i+1:end])
+end
 
 function withserver(f, handler, host = "127.0.0.1"; kw...)
     p = free_port()
@@ -66,12 +72,12 @@ end
         addr(req) = (c = client_address(req); "$(c.ip) $(c.port)")
         for inline in (true, false)
             withserver(addr; inline) do p, _
-                lp = free_port()
-                @test curl("--local-port", lp, "http://127.0.0.1:$p/") == "127.0.0.1 $lp"
+                b, lp = curl_port("http://127.0.0.1:$p/")
+                @test b == "127.0.0.1 $lp"
             end
             withserver(addr; inline, tls = TLSConfig(cert("rsa"), key("rsa"))) do p, _
-                lp = free_port()
-                @test curl("-k", "--local-port", lp, "https://127.0.0.1:$p/") == "127.0.0.1 $lp"
+                b, lp = curl_port("-k", "https://127.0.0.1:$p/")
+                @test b == "127.0.0.1 $lp"
             end
             v6 = try
                 close(listen(ip"::1", 0)); true
@@ -79,16 +85,16 @@ end
                 false
             end
             v6 && withserver(addr, "::1"; inline) do p, _
-                lp = free_port()
-                @test curl("-g", "--local-port", lp, "http://[::1]:$p/") == "::1 $lp"
+                b, lp = curl_port("-g", "http://[::1]:$p/")
+                @test b == "::1 $lp"
             end
         end
 
         # captured with the request: still there after the connection is gone
         kept = Channel{Any}(4)
         withserver(req -> (put!(kept, req); "ok")) do p, _
-            lp = free_port()
-            @test curl("--local-port", lp, "http://127.0.0.1:$p/") == "ok"
+            b, lp = curl_port("http://127.0.0.1:$p/")
+            @test b == "ok"
             req = take!(kept)
             sleep(0.2)
             @test client_address(req) == (ip = "127.0.0.1", port = lp)
@@ -96,8 +102,7 @@ end
         end
         # an inline handler asks while it runs; without asking it is gone afterwards
         withserver(req -> (path(uri(req)) == "/ask" && client_address(req); put!(kept, req); "ok"); inline = true) do p, _
-            lp = free_port()
-            curl("--local-port", lp, "http://127.0.0.1:$p/ask")
+            _, lp = curl_port("http://127.0.0.1:$p/ask")
             @test client_address(take!(kept)) == (ip = "127.0.0.1", port = lp)
             curl("http://127.0.0.1:$p/no")
             @test client_address(take!(kept)) === nothing
@@ -106,12 +111,12 @@ end
         # stream, SSE and WebSocket handlers
         for inline in (true, false)
             withserver(req -> (c = client_address(req); stream(io -> write(io, string(c.port)), req)); inline) do p, _
-                lp = free_port()
-                @test curl("--local-port", lp, "http://127.0.0.1:$p/") == string(lp)
+                b, lp = curl_port("http://127.0.0.1:$p/")
+                @test b == string(lp)
             end
             withserver(req -> sse(io -> write_event(io, string(client_address(req).port)), req); inline) do p, _
-                lp = free_port()
-                @test strip(curl("--local-port", lp, "-H", "Accept: text/event-stream", "http://127.0.0.1:$p/")) == "data: $lp"
+                b, lp = curl_port("-H", "Accept: text/event-stream", "http://127.0.0.1:$p/")
+                @test strip(b) == "data: $lp"
             end
             seen = Channel{Any}(1)
             withserver(req -> (put!(seen, client_address(req)); websocket(req; on_open = ws -> close(ws))); inline) do p, _
